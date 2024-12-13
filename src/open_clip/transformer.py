@@ -207,6 +207,83 @@ class AttentionalPooler(nn.Module):
         return out
 
 
+class Mlp(nn.Module):
+    """ MLP as used in Vision Transformer, MLP-Mixer and related networks
+    """
+    def __init__(
+            self,
+            dim_in,
+            dim_hidden=None,
+            dim_out=None,
+            bias=True,
+            act_layer=nn.GELU,
+            channel_idle=False,
+            idle_ratio=0.75):
+            
+        super().__init__()
+        
+        ######################## ↓↓↓↓↓↓ ########################
+        # Hyperparameters
+        self.dim_in = dim_in
+        self.dim_hidden = dim_hidden or dim_in
+        self.dim_out = dim_out or dim_in
+        ######################## ↑↑↑↑↑↑ ########################
+        
+        ######################## ↓↓↓↓↓↓ ########################
+        # Self-attention projections
+        self.c_fc = nn.Linear(self.dim_in, self.dim_hidden, bias=bias)
+        self.c_proj = nn.Linear(self.dim_hidden, self.dim_out, bias=bias)
+        self.act = act_layer()
+        ######################## ↑↑↑↑↑↑ ########################
+        
+        ######################## ↓↓↓↓↓↓ ########################
+        # Channel-idle
+        self.channel_idle = channel_idle
+        self.act_channels = int(dim_hidden * (1-idle_ratio))
+        ######################## ↑↑↑↑↑↑ ########################
+        
+    def forward(self, x):
+        B, N, C = x.shape
+        # FFN in
+        x = self.c_fc(x) # B, N, 4C
+        
+        # Activation
+        if self.channel_idle:
+            mask = torch.zeros_like(x, dtype=torch.bool)
+            mask[:, :, :self.act_channels] = True
+            x = torch.where(mask, self.act(x), x)
+        else:
+            x = self.act(x)
+            
+        # FFN out
+        x = self.c_proj(x)
+        return x
+        
+    def reparam(self):
+        self.eval()
+        with torch.no_grad():
+            mean = self.norm1.running_mean
+            std = torch.sqrt(self.norm1.running_var + self.norm1.eps)
+            weight = self.norm1.weight
+            bias = self.norm1.bias
+            
+            fc1_bias = self.fc1(-mean/std*weight+bias)
+            fc1_weight = self.fc1.weight / std[None, :] * weight[None, :]
+            
+            mean = self.norm2.running_mean
+            std = torch.sqrt(self.norm2.running_var + self.norm2.eps)
+            weight = self.norm2.weight
+            bias = self.norm2.bias
+            
+            fc2_bias = self.fc2(-mean/std*weight+bias)
+            fc2_weight = self.fc2.weight / std[None, :] * weight[None, :]
+            
+            if self.layer_scale:
+                fc2_weight = fc2_weight * self.ls[:, None]
+        
+        return fc1_bias, fc1_weight, fc2_bias, fc2_weight, self.act_channels
+        
+
 class ResidualAttentionBlock(nn.Module):
     def __init__(
             self,
@@ -218,22 +295,27 @@ class ResidualAttentionBlock(nn.Module):
             norm_layer: Callable = LayerNorm,
             is_cross_attention: bool = False,
             batch_first: bool = True,
+            channel_idle: bool = True,
+            idle_ratio: float = 0.75,
     ):
         super().__init__()
 
         self.ln_1 = norm_layer(d_model)
-        self.attn = nn.MultiheadAttention(d_model, n_head, batch_first=batch_first)
+        self.attn = nn.MultiheadAttention(d_model, n_head, batch_first=batch_first)        
         self.ls_1 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
         if is_cross_attention:
             self.ln_1_kv = norm_layer(d_model)
 
         self.ln_2 = norm_layer(d_model)
         mlp_width = int(d_model * mlp_ratio)
-        self.mlp = nn.Sequential(OrderedDict([
-            ("c_fc", nn.Linear(d_model, mlp_width)),
-            ("gelu", act_layer()),
-            ("c_proj", nn.Linear(mlp_width, d_model))
-        ]))
+        self.mlp = Mlp(dim_in=d_model, dim_hidden=mlp_width, act_layer=act_layer, 
+                       channel_idle=channel_idle, idle_ratio=idle_ratio)
+        
+        #nn.Sequential(OrderedDict([
+        #    ("c_fc", nn.Linear(d_model, mlp_width)),
+        #    ("gelu", act_layer()),
+        #    ("c_proj", nn.Linear(mlp_width, d_model))
+        #]))
         self.ls_2 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
 
     def attention(
