@@ -52,6 +52,9 @@ class CLIPVisionCfg:
     timm_proj_bias: bool = False  # enable bias final projection
     timm_drop: float = 0.  # head dropout
     timm_drop_path: Optional[float] = None  # backbone stochastic depth
+    
+    channel_idle: bool = False, # Channel idle
+    idle_ratio: float = 0.75, # Channel idle
 
 
 @dataclass
@@ -115,7 +118,6 @@ def _build_vision_tower(
     # memory efficient in recent PyTorch releases (>= 1.10).
     # NOTE: timm models always use native GELU regardless of quick_gelu flag.
     act_layer = QuickGELU if quick_gelu else nn.GELU
-
     if vision_cfg.timm_model_name:
         visual = TimmModel(
             vision_cfg.timm_model_name,
@@ -145,7 +147,9 @@ def _build_vision_tower(
             norm_layer = partial(norm_layer, **vision_cfg.norm_kwargs)
         if vision_cfg.act_kwargs is not None:
             act_layer = partial(act_layer, **vision_cfg.act_kwargs)
-
+        
+        print("vision transformer")
+        
         visual = VisionTransformer(
             image_size=vision_cfg.image_size,
             patch_size=vision_cfg.patch_size,
@@ -166,6 +170,9 @@ def _build_vision_tower(
             output_dim=embed_dim,
             act_layer=act_layer,
             norm_layer=norm_layer,
+            
+            channel_idle=vision_cfg.channel_idle,
+            idle_ratio=vision_cfg.idle_ratio
         )
 
     return visual
@@ -196,7 +203,8 @@ def _build_text_tower(
             norm_layer = partial(norm_layer, **text_cfg.norm_kwargs)
         if text_cfg.act_kwargs is not None:
             act_layer = partial(act_layer, **text_cfg.act_kwargs)
-
+        
+        print("text transformer")
         text = TextTransformer(
             context_length=text_cfg.context_length,
             vocab_size=text_cfg.vocab_size,

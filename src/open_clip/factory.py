@@ -230,6 +230,10 @@ def create_model(
         output_dict: Optional[bool] = None,
         require_pretrained: bool = False,
         load_weights_only: bool = True,
+        
+        channel_idle: bool = False, # Channel idle
+        idle_ratio: float = 0.75, # Channel idle
+        
         **model_kwargs,
 ):
     """Creates and configures a contrastive vision-language model.
@@ -317,6 +321,10 @@ def create_model(
     if force_image_size is not None:
         # override model config's image size
         model_cfg["vision_cfg"]["image_size"] = force_image_size
+        
+    if channel_idle:
+        model_cfg["vision_cfg"]["channel_idle"] = True
+        model_cfg["vision_cfg"]["idle_ratio"] = idle_ratio
 
     is_timm_model = 'timm_model_name' in model_cfg.get('vision_cfg', {})
     if pretrained_image:
@@ -481,6 +489,10 @@ def create_model_and_transforms(
         cache_dir: Optional[str] = None,
         output_dict: Optional[bool] = None,
         load_weights_only: bool = True,
+        
+        channel_idle: bool = False, # Channel idle
+        idle_ratio: float = 0.75, # Channel idle
+        
         **model_kwargs,
 ):
     force_preprocess_cfg = merge_preprocess_kwargs(
@@ -507,6 +519,10 @@ def create_model_and_transforms(
         cache_dir=cache_dir,
         output_dict=output_dict,
         load_weights_only=load_weights_only,
+        
+        channel_idle=channel_idle, # Channel idle
+        idle_ratio=idle_ratio, # Channel idle
+        
         **model_kwargs,
     )
 

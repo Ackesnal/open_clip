@@ -238,6 +238,8 @@ def main(args):
         pretrained_image=args.pretrained_image,
         output_dict=True,
         cache_dir=args.cache_dir,
+        channel_idle=args.channel_idle, # Channel idle
+        idle_ratio=args.idle_ratio, # Channel idle
         **model_kwargs,
     )
     if args.distill:

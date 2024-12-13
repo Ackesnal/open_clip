@@ -295,7 +295,7 @@ class ResidualAttentionBlock(nn.Module):
             norm_layer: Callable = LayerNorm,
             is_cross_attention: bool = False,
             batch_first: bool = True,
-            channel_idle: bool = True,
+            channel_idle: bool = False,
             idle_ratio: float = 0.75,
     ):
         super().__init__()
@@ -308,14 +308,20 @@ class ResidualAttentionBlock(nn.Module):
 
         self.ln_2 = norm_layer(d_model)
         mlp_width = int(d_model * mlp_ratio)
-        self.mlp = Mlp(dim_in=d_model, dim_hidden=mlp_width, act_layer=act_layer, 
-                       channel_idle=channel_idle, idle_ratio=idle_ratio)
         
-        #nn.Sequential(OrderedDict([
-        #    ("c_fc", nn.Linear(d_model, mlp_width)),
-        #    ("gelu", act_layer()),
-        #    ("c_proj", nn.Linear(mlp_width, d_model))
-        #]))
+        if type(channel_idle) == tuple:
+            channel_idle = channel_idle[0]    
+        if type(idle_ratio) == tuple:
+            idle_ratio = idle_ratio[0]
+        if channel_idle:
+            self.mlp = Mlp(dim_in=d_model, dim_hidden=mlp_width, act_layer=act_layer, 
+                           channel_idle=channel_idle, idle_ratio=idle_ratio)
+        else:
+            self.mlp = nn.Sequential(OrderedDict([
+                ("c_fc", nn.Linear(d_model, mlp_width)),
+                ("gelu", act_layer()),
+                ("c_proj", nn.Linear(mlp_width, d_model))
+            ]))
         self.ls_2 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
 
     def attention(
@@ -409,6 +415,9 @@ class Transformer(nn.Module):
             act_layer: Callable = nn.GELU,
             norm_layer: Callable = LayerNorm,
             batch_first: bool = True,
+            
+            channel_idle: bool = False, # Channel idle
+            idle_ratio: float = 0.75, # Channel idle
     ):
         super().__init__()
         self.width = width
@@ -425,6 +434,8 @@ class Transformer(nn.Module):
                 act_layer=act_layer,
                 norm_layer=norm_layer,
                 batch_first=batch_first,
+                channel_idle=channel_idle,
+                idle_ratio=idle_ratio,
             )
             for _ in range(layers)
         ])
@@ -537,6 +548,9 @@ class VisionTransformer(nn.Module):
             act_layer: Callable = nn.GELU,
             norm_layer: Callable = LayerNorm,
             output_tokens: bool = False,
+            
+            channel_idle: bool = False, # Channel idle
+            idle_ratio: float = 0.75, # Channel idle
     ):
         super().__init__()
         assert pool_type in ('tok', 'avg', 'none')
@@ -578,6 +592,8 @@ class VisionTransformer(nn.Module):
             ls_init_value=ls_init_value,
             act_layer=act_layer,
             norm_layer=norm_layer,
+            channel_idle=channel_idle,
+            idle_ratio=idle_ratio,
         )
 
         if attentional_pool:

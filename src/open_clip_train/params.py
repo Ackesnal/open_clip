@@ -475,6 +475,16 @@ def parse_args(args):
         type=str,
         help='A string to specify a specific distributed loss implementation.'
     )
+    parser.add_argument(
+        "--channel_idle",
+        default=False,
+        action='store_true',
+    )
+    parser.add_argument(
+        "--idle_ratio",
+        default=0.75,
+        type=float,
+    )
 
     args = parser.parse_args(args)
 
