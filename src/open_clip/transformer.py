@@ -243,7 +243,6 @@ class Mlp(nn.Module):
         ######################## ↑↑↑↑↑↑ ########################
         
     def forward(self, x):
-        B, N, C = x.shape
         # FFN in
         x = self.c_fc(x) # B, N, 4C
         
@@ -313,15 +312,13 @@ class ResidualAttentionBlock(nn.Module):
             channel_idle = channel_idle[0]    
         if type(idle_ratio) == tuple:
             idle_ratio = idle_ratio[0]
-        if channel_idle:
-            self.mlp = Mlp(dim_in=d_model, dim_hidden=mlp_width, act_layer=act_layer, 
-                           channel_idle=channel_idle, idle_ratio=idle_ratio)
-        else:
-            self.mlp = nn.Sequential(OrderedDict([
-                ("c_fc", nn.Linear(d_model, mlp_width)),
-                ("gelu", act_layer()),
-                ("c_proj", nn.Linear(mlp_width, d_model))
-            ]))
+        self.mlp = Mlp(dim_in=d_model, dim_hidden=mlp_width, act_layer=act_layer, 
+                       channel_idle=channel_idle, idle_ratio=idle_ratio)
+            #self.mlp = nn.Sequential(OrderedDict([
+            #    ("c_fc", nn.Linear(d_model, mlp_width)),
+            #    ("gelu", act_layer()),
+            #    ("c_proj", nn.Linear(mlp_width, d_model))
+            #]))
         self.ls_2 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
 
     def attention(
