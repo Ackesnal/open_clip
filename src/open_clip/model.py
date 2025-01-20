@@ -53,8 +53,10 @@ class CLIPVisionCfg:
     timm_drop: float = 0.  # head dropout
     timm_drop_path: Optional[float] = None  # backbone stochastic depth
     
-    channel_idle: bool = False, # Channel idle
-    idle_ratio: float = 0.75, # Channel idle
+    channel_idle: bool = False # Channel idle
+    idle_ratio: float = 0.75 # Channel idle
+    feature_norm: str = "LayerNorm"
+    slab: Optional[bool] = False
 
 
 @dataclass
@@ -111,9 +113,10 @@ def _build_vision_tower(
         quick_gelu: bool = False,
         cast_dtype: Optional[torch.dtype] = None
 ):
+    
     if isinstance(vision_cfg, dict):
         vision_cfg = CLIPVisionCfg(**vision_cfg)
-
+    
     # OpenAI models are pretrained w/ QuickGELU but native nn.GELU is both faster and more
     # memory efficient in recent PyTorch releases (>= 1.10).
     # NOTE: timm models always use native GELU regardless of quick_gelu flag.
@@ -172,7 +175,9 @@ def _build_vision_tower(
             norm_layer=norm_layer,
             
             channel_idle=vision_cfg.channel_idle,
-            idle_ratio=vision_cfg.idle_ratio
+            idle_ratio=vision_cfg.idle_ratio,
+            feature_norm=vision_cfg.feature_norm,
+            slab=vision_cfg.slab
         )
 
     return visual
@@ -244,7 +249,7 @@ class CLIP(nn.Module):
     ):
         super().__init__()
         self.output_dict = output_dict
-
+        
         self.visual = _build_vision_tower(embed_dim, vision_cfg, quick_gelu, cast_dtype)
 
         text = _build_text_tower(embed_dim, text_cfg, quick_gelu, cast_dtype)
@@ -320,7 +325,7 @@ class CLIP(nn.Module):
     ):
         image_features = self.encode_image(image, normalize=True) if image is not None else None
         text_features = self.encode_text(text, normalize=True) if text is not None else None
-
+        
         if self.output_dict:
             out_dict = {
                 "image_features": image_features,
@@ -334,6 +339,12 @@ class CLIP(nn.Module):
         if self.logit_bias is not None:
             return image_features, text_features, self.logit_scale.exp(), self.logit_bias
         return image_features, text_features, self.logit_scale.exp()
+    
+    def reparam(self):
+        self.visual.reparam()
+        
+    def adapt_gamma(self, gamma):
+        self.visual.adapt_gamma(gamma)
 
 
 class CustomTextCLIP(nn.Module):

@@ -36,6 +36,8 @@ from open_clip_train.params import parse_args
 from open_clip_train.scheduler import cosine_lr, const_lr, const_lr_cooldown
 from open_clip_train.train import train_one_epoch, evaluate
 from open_clip_train.file_utils import pt_load, check_exists, start_sync_process, remote_sync
+from ptflops import get_model_complexity_info
+import time
 
 
 LATEST_CHECKPOINT_NAME = "epoch_latest.pt"
@@ -67,6 +69,34 @@ def get_latest_checkpoint(path: str, remote : bool):
         return checkpoints[-1]
     return None
 
+
+def get_macs(model, x=None):
+    macs, params = get_model_complexity_info(model, (3, 224, 224), print_per_layer_stat=False, as_strings=False)
+    if next(model.parameters()).get_device()==0:
+        print('{:<} {:<}{:<}'.format('Computational complexity: ', round(macs*1e-9, 2), 'GMACs'))
+        print('{:<} {:<}{:<}'.format('Number of parameters: ', round(params*1e-6, 2), 'M'))
+        print()
+
+
+def speed_test(model, ntest=100, batchsize=128, x=None, **kwargs):
+    if x is None:
+        x = torch.rand(batchsize, 3, 224, 224).cuda()
+    else:
+        batchsize = x.shape[0]
+    model.eval().cuda()
+
+    start = time.time()
+    with torch.no_grad():
+        for i in range(ntest):
+            model(x, **kwargs)
+    torch.cuda.synchronize()
+    end = time.time()
+
+    elapse = end - start
+    speed = batchsize * ntest / elapse
+
+    return speed
+    
 
 def main(args):
     args = parse_args(args)
@@ -240,6 +270,8 @@ def main(args):
         cache_dir=args.cache_dir,
         channel_idle=args.channel_idle, # Channel idle
         idle_ratio=args.idle_ratio, # Channel idle
+        feature_norm=args.feature_norm,
+        slab=args.slab,
         **model_kwargs,
     )
     if args.distill:
@@ -263,7 +295,39 @@ def main(args):
         linear_replacement_cls = getattr(bnb.nn.triton_based_modules, args.use_bnb_linear)
         replace_linear(model, linear_replacement_cls)
         model = model.to(device)
+    
+    
+    if args.test_speed:
+        if args.reparam:
+            print("Reparametering the backbone ...")
+            model.eval()
+            model = model.visual
+            model.reparam()
+            model.to(device)
+            print("...")
+            print("Reparameterization done!")
+        
+#        if args.latency_profile:
+#            model.eval()
+#            x = torch.rand(128, 3, 224, 224).to(device)
+#            timer = TimeMeasure(device=args.device)
+#            timer.add_hooks(model)
+#            model(x)
+#            for name, time_ms in timer.forward_times.items():
+#                print(f"Module {name}: {time_ms:.3f} ms")
+#            model.train()
 
+        # test model throughput for three times to ensure accuracy
+        print('Start inference speed testing...')
+        inference_speed = speed_test(model)
+        print('inference_speed (inaccurate):', inference_speed, 'images/s')
+        inference_speed = speed_test(model)
+        print('inference_speed:', inference_speed, 'images/s')
+        inference_speed = speed_test(model)
+        print('inference_speed:', inference_speed, 'images/s')
+        get_macs(model)
+        return
+    
     random_seed(args.seed, args.rank)
 
     if args.trace:
@@ -481,7 +545,7 @@ def main(args):
     for epoch in range(start_epoch, args.epochs):
         if is_master(args):
             logging.info(f'Start epoch {epoch}')
-
+            
         train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist_model, args, tb_writer=writer)
         completed_epoch = epoch + 1
 

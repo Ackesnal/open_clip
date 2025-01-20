@@ -218,7 +218,9 @@ class Mlp(nn.Module):
             bias=True,
             act_layer=nn.GELU,
             channel_idle=False,
-            idle_ratio=0.75):
+            idle_ratio=0.75,
+            feature_norm="LayerNorm",
+            slab=False):
             
         super().__init__()
         
@@ -242,7 +244,36 @@ class Mlp(nn.Module):
         self.act_channels = int(dim_hidden * (1-idle_ratio))
         ######################## ↑↑↑↑↑↑ ########################
         
+        ######################## ↓↓↓↓↓↓ ########################
+        # Feature normalization
+        if slab:
+            self.slab = True
+            self.gamma = 1
+            self.bn = nn.BatchNorm1d(self.dim_in)
+            self.ln = nn.LayerNorm(self.dim_in)
+        else:
+            self.slab = False
+            if feature_norm in ["BN", "BatchNorm"]:
+                self.feature_norm = "BatchNorm"
+                self.norm = nn.BatchNorm1d(self.dim_in)
+            else:
+                self.feature_norm = "LayerNorm"
+                self.norm = nn.LayerNorm(self.dim_in)
+        ######################## ↑↑↑↑↑↑ ########################
+        
     def forward(self, x):
+        # Shortcut
+        shortcut = x
+        
+        # Normalization
+        if self.slab:
+            x = self.gamma * self.ln(x) + (1 - self.gamma) * self.bn(x.transpose(-1, -2)).transpose(-1, -2)
+        else:
+            if self.feature_norm == "LayerNorm":
+                x = self.norm(x)
+            elif self.feature_norm == "BatchNorm":
+                x = self.norm(x.transpose(-1, -2)).transpose(-1, -2)
+    
         # FFN in
         x = self.c_fc(x) # B, N, 4C
         
@@ -256,31 +287,50 @@ class Mlp(nn.Module):
             
         # FFN out
         x = self.c_proj(x)
-        return x
+        
+        return x + shortcut
         
     def reparam(self):
-        self.eval()
-        with torch.no_grad():
-            mean = self.norm1.running_mean
-            std = torch.sqrt(self.norm1.running_var + self.norm1.eps)
-            weight = self.norm1.weight
-            bias = self.norm1.bias
-            
-            fc1_bias = self.fc1(-mean/std*weight+bias)
-            fc1_weight = self.fc1.weight / std[None, :] * weight[None, :]
-            
-            mean = self.norm2.running_mean
-            std = torch.sqrt(self.norm2.running_var + self.norm2.eps)
-            weight = self.norm2.weight
-            bias = self.norm2.bias
-            
-            fc2_bias = self.fc2(-mean/std*weight+bias)
-            fc2_weight = self.fc2.weight / std[None, :] * weight[None, :]
-            
-            if self.layer_scale:
-                fc2_weight = fc2_weight * self.ls[:, None]
+        return self.c_fc.bias, self.c_fc.weight, self.c_proj.bias, self.c_proj.weight, self.act_channels
+    
+    def adapt_gamma(self, gamma):
+        self.gamma = gamma
         
-        return fc1_bias, fc1_weight, fc2_bias, fc2_weight, self.act_channels
+        
+        
+class RePaMlp(nn.Module):
+    def __init__(self, 
+                 fc1_bias, 
+                 fc1_weight, 
+                 fc2_bias, 
+                 fc2_weight,
+                 act_channels, 
+                 act_layer):
+        super().__init__()
+        
+        dim = fc1_weight.shape[1]
+        self.fc1 = nn.Linear(dim, dim)
+        self.fc2 = nn.Linear(dim, act_channels)
+        self.fc3 = nn.Linear(act_channels, dim, bias=False)
+        self.act = act_layer()
+        
+        with torch.no_grad():
+            weight1 = fc1_weight[act_channels:, :].T @ fc2_weight[:, act_channels:].T
+            weight2 = fc1_weight[:act_channels, :]
+            weight3 = fc2_weight[:, :act_channels] 
+            bias1 = (fc1_bias[act_channels:].unsqueeze(0) @ fc2_weight[:, act_channels:].T).squeeze() + fc2_bias
+            bias2 = fc1_bias[:act_channels]
+            
+            self.fc1.weight.copy_(weight1.T)
+            self.fc1.bias.copy_(bias1)
+            self.fc2.weight.copy_(weight2)
+            self.fc2.bias.copy_(bias2)
+            self.fc3.weight.copy_(weight3)
+        
+    def forward(self, x):
+        x = self.fc3(self.act(self.fc2(x))) + self.fc1(x)
+        return x
+                    
         
 
 class ResidualAttentionBlock(nn.Module):
@@ -288,7 +338,7 @@ class ResidualAttentionBlock(nn.Module):
             self,
             d_model: int,
             n_head: int,
-            mlp_ratio: float = 4.0,
+            mlp_ratio: float = 4.0, 
             ls_init_value: float = None,
             act_layer: Callable = nn.GELU,
             norm_layer: Callable = LayerNorm,
@@ -296,6 +346,8 @@ class ResidualAttentionBlock(nn.Module):
             batch_first: bool = True,
             channel_idle: bool = False,
             idle_ratio: float = 0.75,
+            feature_norm: str = "LayerNorm",
+            slab: bool = False,
     ):
         super().__init__()
 
@@ -304,22 +356,21 @@ class ResidualAttentionBlock(nn.Module):
         self.ls_1 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
         if is_cross_attention:
             self.ln_1_kv = norm_layer(d_model)
-
-        self.ln_2 = norm_layer(d_model)
-        mlp_width = int(d_model * mlp_ratio)
         
-        if type(channel_idle) == tuple:
-            channel_idle = channel_idle[0]    
-        if type(idle_ratio) == tuple:
-            idle_ratio = idle_ratio[0]
+        mlp_width = int(d_model * mlp_ratio)
         self.mlp = Mlp(dim_in=d_model, dim_hidden=mlp_width, act_layer=act_layer, 
-                       channel_idle=channel_idle, idle_ratio=idle_ratio)
-            #self.mlp = nn.Sequential(OrderedDict([
-            #    ("c_fc", nn.Linear(d_model, mlp_width)),
-            #    ("gelu", act_layer()),
-            #    ("c_proj", nn.Linear(mlp_width, d_model))
-            #]))
-        self.ls_2 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
+                       channel_idle=channel_idle, idle_ratio=idle_ratio, 
+                       feature_norm = feature_norm, slab = slab,)
+        self.act_layer = act_layer
+        
+        # self.ln_2 = norm_layer(d_model)
+        # mlp_width = int(d_model * mlp_ratio)
+        # self.mlp = nn.Sequential(OrderedDict([
+        #     ("c_fc", nn.Linear(d_model, mlp_width)),
+        #     ("gelu", act_layer()),
+        #     ("c_proj", nn.Linear(mlp_width, d_model))
+        # ]))
+        # self.ls_2 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
 
     def attention(
             self,
@@ -346,8 +397,17 @@ class ResidualAttentionBlock(nn.Module):
         k_x = self.ln_1_kv(k_x) if hasattr(self, "ln_1_kv") and k_x is not None else None
         v_x = self.ln_1_kv(v_x) if hasattr(self, "ln_1_kv") and v_x is not None else None
         x = q_x + self.ls_1(self.attention(q_x=self.ln_1(q_x), k_x=k_x, v_x=v_x, attn_mask=attn_mask))
-        x = x + self.ls_2(self.mlp(self.ln_2(x)))
+        x = self.mlp(x)
         return x
+        
+    def reparam(self):
+        fc1_bias, fc1_weight, fc2_bias, fc2_weight, act_channels = self.mlp.reparam()
+        del self.mlp
+        self.mlp = RePaMlp(fc1_bias, fc1_weight, fc2_bias, fc2_weight, act_channels, self.act_layer)
+        return
+        
+    def adapt_gamma(self, gamma):
+        self.mlp.adapt_gamma(gamma)
 
 
 class CustomResidualAttentionBlock(nn.Module):
@@ -415,13 +475,16 @@ class Transformer(nn.Module):
             
             channel_idle: bool = False, # Channel idle
             idle_ratio: float = 0.75, # Channel idle
+            
+            feature_norm: str = "LayerNorm",
+            slab: bool = False,
     ):
         super().__init__()
         self.width = width
         self.layers = layers
         self.batch_first = batch_first
         self.grad_checkpointing = False
-
+        
         self.resblocks = nn.ModuleList([
             ResidualAttentionBlock(
                 width,
@@ -433,6 +496,8 @@ class Transformer(nn.Module):
                 batch_first=batch_first,
                 channel_idle=channel_idle,
                 idle_ratio=idle_ratio,
+                feature_norm=feature_norm,
+                slab=slab
             )
             for _ in range(layers)
         ])
@@ -454,7 +519,16 @@ class Transformer(nn.Module):
         if not self.batch_first:
             x = x.transpose(0, 1)    # LND -> NLD
         return x
-
+        
+    def reparam(self):
+        for blk in self.resblocks:
+            blk.reparam()
+        return
+        
+    def adapt_gamma(self, gamma):
+        for blk in self.resblocks:
+            blk.adapt_gamma(gamma)
+        
 
 class CustomTransformer(nn.Module):
     """ A custom transformer that can use different block types. """
@@ -548,8 +622,11 @@ class VisionTransformer(nn.Module):
             
             channel_idle: bool = False, # Channel idle
             idle_ratio: float = 0.75, # Channel idle
+            feature_norm: str = "LayerNorm",
+            slab: bool = False,
     ):
         super().__init__()
+        
         assert pool_type in ('tok', 'avg', 'none')
         self.output_tokens = output_tokens
         image_height, image_width = self.image_size = to_2tuple(image_size)
@@ -581,6 +658,7 @@ class VisionTransformer(nn.Module):
         self.patch_dropout = PatchDropout(patch_dropout) if patch_dropout > 0. else nn.Identity()
 
         self.ln_pre = nn.Identity() if no_ln_pre else norm_layer(width)
+        
         self.transformer = Transformer(
             width,
             layers,
@@ -591,6 +669,8 @@ class VisionTransformer(nn.Module):
             norm_layer=norm_layer,
             channel_idle=channel_idle,
             idle_ratio=idle_ratio,
+            feature_norm = feature_norm,
+            slab = slab,
         )
 
         if attentional_pool:
@@ -749,7 +829,14 @@ class VisionTransformer(nn.Module):
             return pooled, tokens
         
         return pooled
-
+        
+    def reparam(self):
+        self.transformer.reparam()
+        return
+    
+    def adapt_gamma(self, gamma):
+        self.transformer.adapt_gamma(gamma)
+        
 
 def text_global_pool(x, text: Optional[torch.Tensor] = None, pool_type: str = 'argmax'):
     if pool_type == 'first':

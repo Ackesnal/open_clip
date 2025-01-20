@@ -233,6 +233,8 @@ def create_model(
         
         channel_idle: bool = False, # Channel idle
         idle_ratio: float = 0.75, # Channel idle
+        feature_norm: str = "LayerNorm",
+        slab: Optional[bool] = False,
         
         **model_kwargs,
 ):
@@ -284,7 +286,7 @@ def create_model(
         # Load Hugging Face model
         model = create_model('hf-hub:organization/model-name')
     """
-
+    
     force_preprocess_cfg = force_preprocess_cfg or {}
     preprocess_cfg = asdict(PreprocessCfg())
     has_hf_hub_prefix = model_name.startswith(HF_HUB_PREFIX)
@@ -325,6 +327,8 @@ def create_model(
     if channel_idle:
         model_cfg["vision_cfg"]["channel_idle"] = True
         model_cfg["vision_cfg"]["idle_ratio"] = idle_ratio
+        model_cfg["vision_cfg"]["feature_norm"] = feature_norm
+        model_cfg["vision_cfg"]["slab"] = slab
 
     is_timm_model = 'timm_model_name' in model_cfg.get('vision_cfg', {})
     if pretrained_image:
@@ -492,6 +496,8 @@ def create_model_and_transforms(
         
         channel_idle: bool = False, # Channel idle
         idle_ratio: float = 0.75, # Channel idle
+        feature_norm: str = "LayerNorm",
+        slab: Optional[bool] = False,
         
         **model_kwargs,
 ):
@@ -522,6 +528,8 @@ def create_model_and_transforms(
         
         channel_idle=channel_idle, # Channel idle
         idle_ratio=idle_ratio, # Channel idle
+        feature_norm=feature_norm,
+        slab=slab,
         
         **model_kwargs,
     )

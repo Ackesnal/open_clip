@@ -430,7 +430,7 @@ def parse_args(args):
         help="Optinoally sync with a remote path specified by this arg",
     )
     parser.add_argument(
-        "--remote-sync-frequency",
+        "--remote-sync-frequency", 
         type=int,
         default=300,
         help="How frequently to sync to a remote directly if --remote-sync is not None.",
@@ -485,7 +485,27 @@ def parse_args(args):
         default=0.75,
         type=float,
     )
-
+    parser.add_argument(
+        "--test_speed",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
+        "--reparam",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
+        "--feature_norm",
+        default="LayerNorm",
+        type=str
+    )
+    parser.add_argument(
+        "--slab",
+        default=False,
+        action="store_true",
+    )
+    
     args = parser.parse_args(args)
 
     if 'timm' not in args.opt:
