@@ -267,6 +267,7 @@ class Mlp(nn.Module):
         
         # Normalization
         if self.slab:
+            print(self.gamma)
             x = self.gamma * self.ln(x) + (1 - self.gamma) * self.bn(x.transpose(-1, -2)).transpose(-1, -2)
         else:
             if self.feature_norm == "LayerNorm":
@@ -351,9 +352,12 @@ class ResidualAttentionBlock(nn.Module):
     ):
         super().__init__()
 
+        
         self.ln_1 = norm_layer(d_model)
+            
         self.attn = nn.MultiheadAttention(d_model, n_head, batch_first=batch_first)        
         self.ls_1 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
+        
         if is_cross_attention:
             self.ln_1_kv = norm_layer(d_model)
         

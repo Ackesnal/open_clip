@@ -91,7 +91,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             
         # Update SLAB normalization gamma
         if args.slab:
-            total_step = (args.epochs-10) * num_batches_per_epoch
+            total_step = (args.epochs-5) * num_batches_per_epoch
             gamma = max(1 - step / total_step, 0)
             model.adapt_gamma(gamma)
         
