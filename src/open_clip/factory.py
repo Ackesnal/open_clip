@@ -328,6 +328,8 @@ def create_model(
         model_cfg["vision_cfg"]["channel_idle"] = True
         model_cfg["vision_cfg"]["idle_ratio"] = idle_ratio
         model_cfg["vision_cfg"]["feature_norm"] = feature_norm
+        
+    if slab:   
         model_cfg["vision_cfg"]["slab"] = slab
 
     is_timm_model = 'timm_model_name' in model_cfg.get('vision_cfg', {})
