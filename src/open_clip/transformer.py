@@ -267,7 +267,6 @@ class Mlp(nn.Module):
         
         # Normalization
         if self.slab:
-            print(self.gamma)
             x = self.gamma * self.ln(x) + (1 - self.gamma) * self.bn(x.transpose(-1, -2)).transpose(-1, -2)
         else:
             if self.feature_norm == "LayerNorm":

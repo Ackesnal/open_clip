@@ -90,11 +90,10 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             scheduler(step)
             
         # Update SLAB normalization gamma
-        if args.slab:
+        if args.slab and i % args.accum_freq == 0:
             total_step = (args.epochs-5) * num_batches_per_epoch
             gamma = max(1 - step / total_step, 0)
             model.module.adapt_gamma(gamma)
-        
 
         images, texts = batch
         images = images.to(device=device, dtype=input_dtype, non_blocking=True)
