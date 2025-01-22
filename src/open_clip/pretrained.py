@@ -299,6 +299,10 @@ _VITL14 = dict(
         hf_hub='apple/DFN2B-CLIP-ViT-L-14/',
         quick_gelu=True,
     ),
+    # DFN-2B 39B SS
+    dfn2b_s39b=_pcfg(
+        hf_hub='apple/DFN2B-CLIP-ViT-L-14-39B/',
+    ),
 )
 
 _VITL14_336 = dict(
@@ -317,6 +321,11 @@ _VITH14 = dict(
         url="https://dl.fbaipublicfiles.com/MMPT/metaclip/h14_fullcc2.5b.pt",
         hf_hub="timm/vit_huge_patch14_clip_224.metaclip_2pt5b/",
         quick_gelu=True,
+    ),
+    metaclip_altogether=_pcfg(
+        url="https://dl.fbaipublicfiles.com/MMPT/metaclip/h14_v1.2_altogether.pt",
+        hf_hub="timm/vit_huge_patch14_clip_224.metaclip_altogether/",
+        # NOTE unlike other MetaCLIP models, this is not using QuickGELU, yay!
     ),
     # DFN-5B (quick-gelu)
     dfn5b=_pcfg(
