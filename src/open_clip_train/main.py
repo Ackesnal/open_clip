@@ -298,10 +298,10 @@ def main(args):
     
     
     if args.test_speed:
+        model = model.visual
         if args.reparam:
             print("Reparametering the backbone ...")
             model.eval()
-            model = model.visual
             model.reparam()
             model.to(device)
             print("...")
@@ -537,6 +537,15 @@ def main(args):
             from open_clip.utils import convert_int8_model_to_inference_mode
             convert_int8_model_to_inference_mode(model)
         # Evaluate.
+        
+        if args.reparam:
+            print("Reparametering the backbone ...")
+            model.eval()
+            model.visual.reparam()
+            model.to(device)
+            print("...")
+            print("Reparameterization done!")
+            
         evaluate(model, data, start_epoch, args, tb_writer=writer, tokenizer=tokenizer)
         return
 

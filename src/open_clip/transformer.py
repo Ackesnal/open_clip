@@ -267,7 +267,10 @@ class Mlp(nn.Module):
         
         # Normalization
         if self.slab:
-            x = self.gamma * self.ln(x) + (1 - self.gamma) * self.bn(x.transpose(-1, -2)).transpose(-1, -2)
+            if self.training:
+                x = self.gamma * self.ln(x) + (1 - self.gamma) * self.bn(x.transpose(-1, -2)).transpose(-1, -2)
+            else:
+                x = self.bn(x.transpose(-1, -2)).transpose(-1, -2)
         else:
             if self.feature_norm == "LayerNorm":
                 x = self.norm(x)
@@ -291,7 +294,15 @@ class Mlp(nn.Module):
         return x + shortcut
         
     def reparam(self):
-        return self.c_fc.bias, self.c_fc.weight, self.c_proj.bias, self.c_proj.weight, self.act_channels
+        mean = self.bn.running_mean
+        std = torch.sqrt(self.bn.running_var + self.bn.eps)
+        weight = self.bn.weight
+        bias = self.bn.bias
+            
+        c_fc_bias = self.c_fc((-mean) / std * weight + bias)
+        c_fc_weight = self.c_fc.weight / std[None, :] * weight[None, :]
+        
+        return c_fc_bias, c_fc_weight, self.c_proj.bias, self.c_proj.weight, self.act_channels
     
     def adapt_gamma(self, gamma):
         self.gamma = gamma
@@ -315,7 +326,7 @@ class RePaMlp(nn.Module):
         self.act = act_layer()
         
         with torch.no_grad():
-            weight1 = fc1_weight[act_channels:, :].T @ fc2_weight[:, act_channels:].T
+            weight1 = fc1_weight[act_channels:, :].T @ fc2_weight[:, act_channels:].T + torch.eye(dim).to(fc1_weight.device)
             weight2 = fc1_weight[:act_channels, :]
             weight3 = fc2_weight[:, :act_channels] 
             bias1 = (fc1_bias[act_channels:].unsqueeze(0) @ fc2_weight[:, act_channels:].T).squeeze() + fc2_bias

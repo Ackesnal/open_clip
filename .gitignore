@@ -149,5 +149,13 @@ src/misc
 src/debug
 core.*
 
+# Logs and model weights
+imgs/
+*.pth
+*.safetensors
+*.bin
+activation_study/*
+
+
 # Allow
 !src/evaluation/misc/results_dbs/*
