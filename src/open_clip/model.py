@@ -57,6 +57,7 @@ class CLIPVisionCfg:
     idle_ratio: float = 0.75 # Channel idle
     feature_norm: str = "LayerNorm"
     slab: Optional[bool] = False
+    heuristic: Optional[str] = None
 
 
 @dataclass
@@ -177,7 +178,8 @@ def _build_vision_tower(
             channel_idle=vision_cfg.channel_idle,
             idle_ratio=vision_cfg.idle_ratio,
             feature_norm=vision_cfg.feature_norm,
-            slab=vision_cfg.slab
+            slab=vision_cfg.slab,
+            heuristic=vision_cfg.heuristic
         )
 
     return visual

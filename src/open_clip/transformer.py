@@ -11,6 +11,12 @@ from torch.utils.checkpoint import checkpoint
 from .utils import to_2tuple
 from .pos_embed import get_2d_sincos_pos_embed
 
+import numpy as np
+from scipy.stats import gaussian_kde
+from sklearn.neighbors import KernelDensity
+
+import torch.multiprocessing as mp
+
 
 class LayerNormFp32(nn.LayerNorm):
     """Subclass torch's LayerNorm to handle fp16 (by casting to float32 and back)."""
@@ -253,14 +259,20 @@ class Mlp(nn.Module):
             self.ln = nn.LayerNorm(self.dim_in)
         else:
             self.slab = False
-            if feature_norm in ["BN", "BatchNorm"]:
+            if feature_norm in ["BN", "BatchNorm", "bn", "batchnorm"]:
                 self.feature_norm = "BatchNorm"
-                self.norm = nn.BatchNorm1d(self.dim_in)
+                self.bn = nn.BatchNorm1d(self.dim_in)
             else:
                 self.feature_norm = "LayerNorm"
-                self.norm = nn.LayerNorm(self.dim_in)
+                self.ln = nn.LayerNorm(self.dim_in)
         ######################## ↑↑↑↑↑↑ ########################
         
+        ######################## ↓↓↓↓↓↓ ########################
+        # Channel MI study
+        self.avg_cosine_sim = 0
+        self.num_images = 0
+        ######################## ↑↑↑↑↑↑ ########################
+            
     def forward(self, x):
         # Shortcut
         shortcut = x
@@ -273,9 +285,9 @@ class Mlp(nn.Module):
                 x = self.bn(x.transpose(-1, -2)).transpose(-1, -2)
         else:
             if self.feature_norm == "LayerNorm":
-                x = self.norm(x)
+                x = self.ln(x)
             elif self.feature_norm == "BatchNorm":
-                x = self.norm(x.transpose(-1, -2)).transpose(-1, -2)
+                x = self.bn(x.transpose(-1, -2)).transpose(-1, -2)
     
         # FFN in
         x = self.c_fc(x) # B, N, 4C
@@ -287,7 +299,7 @@ class Mlp(nn.Module):
             x = torch.where(mask, self.act(x), x)
         else:
             x = self.act(x)
-            
+        
         # FFN out
         x = self.c_proj(x)
         
@@ -324,22 +336,35 @@ class RePaMlp(nn.Module):
         self.fc2 = nn.Linear(dim, act_channels)
         self.fc3 = nn.Linear(act_channels, dim, bias=False)
         self.act = act_layer()
+        self.act_channels = act_channels
         
         with torch.no_grad():
-            weight1 = fc1_weight[act_channels:, :].T @ fc2_weight[:, act_channels:].T + torch.eye(dim).to(fc1_weight.device)
-            weight2 = fc1_weight[:act_channels, :]
-            weight3 = fc2_weight[:, :act_channels] 
-            bias1 = (fc1_bias[act_channels:].unsqueeze(0) @ fc2_weight[:, act_channels:].T).squeeze() + fc2_bias
-            bias2 = fc1_bias[:act_channels]
-            
-            self.fc1.weight.copy_(weight1.T)
-            self.fc1.bias.copy_(bias1)
-            self.fc2.weight.copy_(weight2)
-            self.fc2.bias.copy_(bias2)
-            self.fc3.weight.copy_(weight3)
+            if act_channels == 0:
+                weight1 = fc1_weight.T @ fc2_weight.T + torch.eye(dim).to(fc1_weight.device)
+                bias1 = (fc1_bias.unsqueeze(0) @ fc2_weight.T).squeeze() + fc2_bias
+                self.fc1.weight.copy_(weight1.T)
+                self.fc1.bias.copy_(bias1)
+                del self.fc2
+                del self.fc3
+                del self.act
+            else:
+                weight1 = fc1_weight[act_channels:, :].T @ fc2_weight[:, act_channels:].T + torch.eye(dim).to(fc1_weight.device)
+                weight2 = fc1_weight[:act_channels, :]
+                weight3 = fc2_weight[:, :act_channels] 
+                bias1 = (fc1_bias[act_channels:].unsqueeze(0) @ fc2_weight[:, act_channels:].T).squeeze() + fc2_bias
+                bias2 = fc1_bias[:act_channels]
+                
+                self.fc1.weight.copy_(weight1.T)
+                self.fc1.bias.copy_(bias1)
+                self.fc2.weight.copy_(weight2)
+                self.fc2.bias.copy_(bias2)
+                self.fc3.weight.copy_(weight3)
         
     def forward(self, x):
-        x = self.fc3(self.act(self.fc2(x))) + self.fc1(x)
+        if self.act_channels == 0:
+            x = self.fc1(x)
+        else:
+            x = self.fc3(self.act(self.fc2(x))) + self.fc1(x)
         return x
                     
         
@@ -377,6 +402,14 @@ class ResidualAttentionBlock(nn.Module):
                        feature_norm = feature_norm, slab = slab,)
         self.act_layer = act_layer
         
+        
+        
+        ######################## ↓↓↓↓↓↓ ########################
+        # Channel MI study
+        self.avg_cosine_sim = 0
+        self.num_images = 0
+        ######################## ↑↑↑↑↑↑ ########################
+        
         # self.ln_2 = norm_layer(d_model)
         # mlp_width = int(d_model * mlp_ratio)
         # self.mlp = nn.Sequential(OrderedDict([
@@ -407,11 +440,35 @@ class ResidualAttentionBlock(nn.Module):
             k_x: Optional[torch.Tensor] = None,
             v_x: Optional[torch.Tensor] = None,
             attn_mask: Optional[torch.Tensor] = None,
+            sim = False
     ):
         k_x = self.ln_1_kv(k_x) if hasattr(self, "ln_1_kv") and k_x is not None else None
         v_x = self.ln_1_kv(v_x) if hasattr(self, "ln_1_kv") and v_x is not None else None
         x = q_x + self.ls_1(self.attention(q_x=self.ln_1(q_x), k_x=k_x, v_x=v_x, attn_mask=attn_mask))
+        
+        # x = self.mlp(self.ln_2(x)) + x
         x = self.mlp(x)
+        
+        # if sim:
+        #     # 先对channel归一化
+        #     x_norm = F.normalize(x.transpose(-1, -2), p=2, dim=2)
+            
+        #     # 计算inner product
+        #     cosine_sim = x_norm @ x_norm.transpose(-1,-2) 
+            
+        #     # 减去对角线上的值（自身对自身的相似度）
+        #     cosine_sim = cosine_sim - torch.eye(x_norm.shape[-2]).to(x_norm.device).unsqueeze(0)
+            
+        #     # 每个image取平均
+        #     cosine_sim = cosine_sim.sum(dim=(-1,-2))/(cosine_sim.shape[-1]*(cosine_sim.shape[-2]-1))
+            
+        #     # 把所有batch加起来 cosine_sim = batch * average_cosine_sim
+        #     cosine_sim = cosine_sim.sum()
+            
+        #     self.avg_cosine_sim = self.avg_cosine_sim + cosine_sim
+        #     self.num_images = self.num_images + x_norm.shape[0]
+        #     print(f"Average Cosine Similarity over {self.num_images} images is {self.avg_cosine_sim.item()/self.num_images}")
+        
         return x
         
     def reparam(self):
@@ -488,7 +545,7 @@ class Transformer(nn.Module):
             batch_first: bool = True,
             
             channel_idle: bool = False, # Channel idle
-            idle_ratio: float = 0.75, # Channel idle
+            idle_ratio: Optional[list] = None, # Channel idle
             
             feature_norm: str = "LayerNorm",
             slab: bool = False,
@@ -509,11 +566,11 @@ class Transformer(nn.Module):
                 norm_layer=norm_layer,
                 batch_first=batch_first,
                 channel_idle=channel_idle,
-                idle_ratio=idle_ratio,
+                idle_ratio=idle_ratio[i] if idle_ratio is not None else 0.0,
                 feature_norm=feature_norm,
                 slab=slab
             )
-            for _ in range(layers)
+            for i in range(layers)
         ])
 
     def get_cast_dtype(self) -> torch.dtype:
@@ -521,15 +578,17 @@ class Transformer(nn.Module):
             return self.resblocks[0].mlp.c_fc.int8_original_dtype
         return self.resblocks[0].mlp.c_fc.weight.dtype
 
-    def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None):
+    def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None, sim=False):
         if not self.batch_first:
             x = x.transpose(0, 1).contiguous()    # NLD -> LND
-        for r in self.resblocks:
+        for i, r in enumerate(self.resblocks):
             if self.grad_checkpointing and not torch.jit.is_scripting():
                 # TODO: handle kwargs https://github.com/pytorch/pytorch/issues/79887#issuecomment-1161758372
-                x = checkpoint(r, x, None, None, attn_mask)
+                x = checkpoint(r, x, None, None, attn_mask, sim=sim)
             else:
-                x = r(x, attn_mask=attn_mask)
+                if sim:
+                    print(f"Layer {i}:")
+                x = r(x, attn_mask=attn_mask, sim=sim)
         if not self.batch_first:
             x = x.transpose(0, 1)    # LND -> NLD
         return x
@@ -593,16 +652,16 @@ class CustomTransformer(nn.Module):
             return weight.int8_original_dtype
         return weight.dtype
 
-    def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None):
+    def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None, sim = False):
         if not self.batch_first:
             x = x.transpose(0, 1)  # NLD -> LND
 
         for r in self.resblocks:
             if self.grad_checkpointing and not torch.jit.is_scripting():
                 # TODO: handle kwargs https://github.com/pytorch/pytorch/issues/79887#issuecomment-1161758372
-                x = checkpoint(r, x, None, None, attn_mask)
+                x = checkpoint(r, x, None, None, attn_mask, sim=sim)
             else:
-                x = r(x, attn_mask=attn_mask)
+                x = r(x, attn_mask=attn_mask, sim=sim)
 
         if not self.batch_first:
             x = x.transpose(0, 1)  # NLD -> LND
@@ -638,6 +697,7 @@ class VisionTransformer(nn.Module):
             idle_ratio: float = 0.75, # Channel idle
             feature_norm: str = "LayerNorm",
             slab: bool = False,
+            heuristic: str = None,
     ):
         super().__init__()
         
@@ -673,6 +733,13 @@ class VisionTransformer(nn.Module):
 
         self.ln_pre = nn.Identity() if no_ln_pre else norm_layer(width)
         
+        # set up channel idle ratio for each layer
+        if heuristic is None or heuristic == "static":
+            idle_ratio = [idle_ratio for _ in range(layers)]
+        elif heuristic == "linear":
+            idle_ratio = [(2*idle_ratio-1) + (2-2*idle_ratio) / (layers-1) * (i+1) for i in range(layers-1)] + [0.0]
+            # print(idle_ratio, sum(idle_ratio))
+            
         self.transformer = Transformer(
             width,
             layers,
@@ -812,7 +879,7 @@ class VisionTransformer(nn.Module):
 
         x = self.patch_dropout(x)
         x = self.ln_pre(x)
-        x = self.transformer(x)
+        x = self.transformer(x)#, sim=True)
 
         if self.attn_pool is not None:
             if self.attn_pool_contrastive is not None:

@@ -250,6 +250,7 @@ def main(args):
     if args.siglip:
         model_kwargs['init_logit_scale'] = np.log(10)  # different from CLIP
         model_kwargs['init_logit_bias'] = -10
+        
     model, preprocess_train, preprocess_val = create_model_and_transforms(
         args.model,
         args.pretrained,
@@ -272,6 +273,7 @@ def main(args):
         idle_ratio=args.idle_ratio, # Channel idle
         feature_norm=args.feature_norm,
         slab=args.slab,
+        heuristic=args.idle_ratio_heuristic,
         **model_kwargs,
     )
     if args.distill:
@@ -306,16 +308,6 @@ def main(args):
             model.to(device)
             print("...")
             print("Reparameterization done!")
-        
-#        if args.latency_profile:
-#            model.eval()
-#            x = torch.rand(128, 3, 224, 224).to(device)
-#            timer = TimeMeasure(device=args.device)
-#            timer.add_hooks(model)
-#            model(x)
-#            for name, time_ms in timer.forward_times.items():
-#                print(f"Module {name}: {time_ms:.3f} ms")
-#            model.train()
 
         # test model throughput for three times to ensure accuracy
         print('Start inference speed testing...')
@@ -448,6 +440,18 @@ def main(args):
             sd = checkpoint["state_dict"]
             if not args.distributed and next(iter(sd.items()))[0].startswith('module'):
                 sd = {k[len('module.'):]: v for k, v in sd.items()}
+                
+            # load vanilla module to the new RePaCLIP model
+            del_key_list = []
+            for key, value in sd.items():
+                if "ln_2" in key:
+                    del_key_list.append(key)
+            for key in del_key_list:
+                new_key = key.split("ln_2")
+                new_key = new_key[0] + "mlp.ln" + new_key[1]
+                sd[new_key] = sd[key]
+                sd.pop(key)
+            
             model.load_state_dict(sd)
             if optimizer is not None:
                 optimizer.load_state_dict(checkpoint["optimizer"])
@@ -455,6 +459,17 @@ def main(args):
                 scaler.load_state_dict(checkpoint['scaler'])
             logging.info(f"=> resuming checkpoint '{args.resume}' (epoch {start_epoch})")
         else:
+            # load vanilla module to the new RePaCLIP model
+            del_key_list = []
+            for key, value in sd.items():
+                if "ln_2" in key:
+                    del_key_list.append(key)
+            for key in del_key_list:
+                new_key = key.split("ln_2")
+                new_key = new_key[0] + "mlp.ln" + new_key[1]
+                sd[new_key] = sd[key]
+                sd.pop(key)
+            
             # loading a bare (model only) checkpoint for fine-tune or evaluation
             model.load_state_dict(checkpoint)
             logging.info(f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})")

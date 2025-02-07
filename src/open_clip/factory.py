@@ -235,6 +235,7 @@ def create_model(
         idle_ratio: float = 0.75, # Channel idle
         feature_norm: str = "LayerNorm",
         slab: Optional[bool] = False,
+        heuristic: Optional[str] = None,
         
         **model_kwargs,
 ):
@@ -327,6 +328,7 @@ def create_model(
     if channel_idle:
         model_cfg["vision_cfg"]["channel_idle"] = True
         model_cfg["vision_cfg"]["idle_ratio"] = idle_ratio
+        model_cfg["vision_cfg"]["heuristic"] = heuristic
         model_cfg["vision_cfg"]["feature_norm"] = feature_norm
         
     if slab:   
@@ -500,6 +502,7 @@ def create_model_and_transforms(
         idle_ratio: float = 0.75, # Channel idle
         feature_norm: str = "LayerNorm",
         slab: Optional[bool] = False,
+        heuristic: Optional[str] = None,
         
         **model_kwargs,
 ):
@@ -532,6 +535,7 @@ def create_model_and_transforms(
         idle_ratio=idle_ratio, # Channel idle
         feature_norm=feature_norm,
         slab=slab,
+        heuristic=heuristic,
         
         **model_kwargs,
     )

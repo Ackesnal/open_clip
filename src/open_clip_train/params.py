@@ -486,6 +486,11 @@ def parse_args(args):
         type=float,
     )
     parser.add_argument(
+        "--idle_ratio_heuristic",
+        default="static",
+        type=str
+    )
+    parser.add_argument(
         "--test_speed",
         default=False,
         action="store_true",
