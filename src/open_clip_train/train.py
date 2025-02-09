@@ -95,7 +95,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             gamma = max(1 - step / total_step, 0)
             model.module.adapt_gamma(gamma)
         elif not args.slab:
-            if args.feature_norm in ["LayerNorm", "LN"]:
+            if args.feature_norm in ["LayerNorm", "LN", "ln", "layernorm"]:
                 gamma = 1
             else:
                 gamma = 0

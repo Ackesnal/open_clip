@@ -452,12 +452,16 @@ def main(args):
                 sd[new_key] = sd[key]
                 sd.pop(key)
             
-            model.load_state_dict(sd)
-            if optimizer is not None:
-                optimizer.load_state_dict(checkpoint["optimizer"])
-            if scaler is not None and 'scaler' in checkpoint:
-                scaler.load_state_dict(checkpoint['scaler'])
-            logging.info(f"=> resuming checkpoint '{args.resume}' (epoch {start_epoch})")
+            if len(del_key_list) > 0:
+                model.load_state_dict(sd, strict=False)
+                start_epoch = 0
+            else:
+                model.load_state_dict(sd)
+                if optimizer is not None:
+                    optimizer.load_state_dict(checkpoint["optimizer"])
+                if scaler is not None and 'scaler' in checkpoint:
+                    scaler.load_state_dict(checkpoint['scaler'])
+                logging.info(f"=> resuming checkpoint '{args.resume}' (epoch {start_epoch})")
         else:
             # load vanilla module to the new RePaCLIP model
             del_key_list = []
@@ -471,7 +475,7 @@ def main(args):
                 sd.pop(key)
             
             # loading a bare (model only) checkpoint for fine-tune or evaluation
-            model.load_state_dict(checkpoint)
+            model.load_state_dict(checkpoint, strict=False)
             logging.info(f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})")
 
     # initialize datasets
@@ -483,7 +487,7 @@ def main(args):
         tokenizer=tokenizer,
     )
     assert len(data), 'At least one train or eval dataset must be specified.'
-
+    
     # create scheduler if train
     scheduler = None
     if 'train' in data and optimizer is not None:
@@ -563,7 +567,7 @@ def main(args):
             
         evaluate(model, data, start_epoch, args, tb_writer=writer, tokenizer=tokenizer)
         return
-
+        
     loss = create_loss(args)
 
     for epoch in range(start_epoch, args.epochs):

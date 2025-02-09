@@ -584,7 +584,7 @@ class Transformer(nn.Module):
         for i, r in enumerate(self.resblocks):
             if self.grad_checkpointing and not torch.jit.is_scripting():
                 # TODO: handle kwargs https://github.com/pytorch/pytorch/issues/79887#issuecomment-1161758372
-                x = checkpoint(r, x, None, None, attn_mask, sim=sim)
+                x = checkpoint(r, x, None, None, attn_mask, sim)
             else:
                 if sim:
                     print(f"Layer {i}:")
