@@ -12,8 +12,6 @@ from .utils import to_2tuple
 from .pos_embed import get_2d_sincos_pos_embed
 
 import numpy as np
-from scipy.stats import gaussian_kde
-from sklearn.neighbors import KernelDensity
 
 import torch.multiprocessing as mp
 
