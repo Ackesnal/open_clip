@@ -462,8 +462,16 @@ def main(args):
                 if scaler is not None and 'scaler' in checkpoint:
                     scaler.load_state_dict(checkpoint['scaler'])
                 logging.info(f"=> resuming checkpoint '{args.resume}' (epoch {start_epoch})")
+                
         else:
             # load vanilla module to the new RePaCLIP model
+            
+            if "state_dict" in checkpoint:
+                sd = checkpoint["state_dict"]
+            else:
+                sd = checkpoint
+                
+            
             del_key_list = []
             for key, value in sd.items():
                 if "ln_2" in key:
@@ -474,8 +482,17 @@ def main(args):
                 sd[new_key] = sd[key]
                 sd.pop(key)
             
+            miss_key_list = []
+            for key, value in sd.items():
+                if "module" not in key:
+                    miss_key_list.append(key)
+            for key in miss_key_list:
+                new_key = "module." + key
+                sd[new_key] = sd[key]
+                sd.pop(key)
+                
             # loading a bare (model only) checkpoint for fine-tune or evaluation
-            model.load_state_dict(checkpoint, strict=False)
+            model.load_state_dict(sd, strict=False)
             logging.info(f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})")
 
     # initialize datasets
