@@ -451,12 +451,21 @@ def main(args):
                 new_key = new_key[0] + "mlp.ln" + new_key[1]
                 sd[new_key] = sd[key]
                 sd.pop(key)
+                
+            miss_key_list = []
+            for key, value in sd.items():
+                if "module" not in key:
+                    miss_key_list.append(key)
+            for key in miss_key_list:
+                new_key = "module." + key
+                sd[new_key] = sd[key]
+                sd.pop(key)
             
-            if len(del_key_list) > 0:
+            if len(del_key_list) > 0 or len(miss_key_list) > 0:
                 model.load_state_dict(sd, strict=False)
                 start_epoch = 0
             else:
-                model.load_state_dict(sd)
+                model.load_state_dict(sd, strict=True)
                 if optimizer is not None:
                     optimizer.load_state_dict(checkpoint["optimizer"])
                 if scaler is not None and 'scaler' in checkpoint:
@@ -471,7 +480,6 @@ def main(args):
             else:
                 sd = checkpoint
                 
-            
             del_key_list = []
             for key, value in sd.items():
                 if "ln_2" in key:
