@@ -394,6 +394,12 @@ def main(args):
                     repa_no_decay.append(param)
                 else:
                     repa_decay.append(param)
+            elif 'transformer' in name and 'mlp.c_fc' in name:
+                # 正常更新mlp的输出层
+                if len(param.shape) == 1 or name.endswith(".bias"):
+                    repa_no_decay.append(param)
+                else:
+                    repa_decay.append(param)
             elif 'transformer' in name and 'bn' in name:
                 # 正常更新bn
                 if len(param.shape) == 1 or name.endswith(".bias"):
