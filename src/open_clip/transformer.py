@@ -266,21 +266,21 @@ class Mlp(nn.Module):
         ######################## ↑↑↑↑↑↑ ########################
         
         ######################## ↓↓↓↓↓↓ ########################
-        # Channel MI study
-        self.avg_cosine_sim = 0
-        self.num_images = 0
+        # Channel idle
+        if self.channel_idle:
+            self.num_positive = 0
+            self.num_batch = 0
+            self.mask = nn.Parameter(torch.zeros((1, 1, self.dim_hidden), dtype=torch.bool), requires_grad=False)
+            self.mask[:,:,:self.act_channels] = True
         ######################## ↑↑↑↑↑↑ ########################
             
-    def forward(self, x):
+    def forward(self, x, record_positive=False):
         # Shortcut
         shortcut = x
         
         # Normalization
         if self.slab:
-            if self.training:
-                x = self.gamma * self.ln(x) + (1 - self.gamma) * self.bn(x.transpose(-1, -2)).transpose(-1, -2)
-            else:
-                x = self.bn(x.transpose(-1, -2)).transpose(-1, -2)
+            x = self.gamma * self.ln(x) + (1 - self.gamma) * self.bn(x.transpose(-1, -2)).transpose(-1, -2)
         else:
             if self.feature_norm == "LayerNorm":
                 x = self.ln(x)
@@ -290,13 +290,18 @@ class Mlp(nn.Module):
         # FFN in
         x = self.c_fc(x) # B, N, 4C
         
-        # Activation
-        if self.channel_idle:
-            mask = torch.zeros_like(x, dtype=torch.bool)
-            mask[:, :, :self.act_channels] = True
-            x = torch.where(mask, self.act(x), x)
-        else:
+        if record_positive:
+            # Record positive values before activation
+            self.num_positive = self.num_positive + (x >= 0).sum(-2).sum(0) # 4C
+            
+            # Activation
             x = self.act(x)
+        else:
+            # Activation
+            if self.channel_idle:
+                x = torch.where(self.mask, self.act(x), x)
+            else:
+                x = self.act(x)
         
         # FFN out
         x = self.c_proj(x)
@@ -316,6 +321,11 @@ class Mlp(nn.Module):
     
     def adapt_gamma(self, gamma):
         self.gamma = gamma
+        
+    def generate_mask(self):
+        _, indices = torch.topk(self.num_positive, k=self.act_channels, largest=False, sorted=True)
+        self.mask[:,:,:] = False
+        self.mask[:,:,indices] = True
         
         
         
@@ -401,13 +411,6 @@ class ResidualAttentionBlock(nn.Module):
         self.act_layer = act_layer
         
         
-        
-        ######################## ↓↓↓↓↓↓ ########################
-        # Channel MI study
-        self.avg_cosine_sim = 0
-        self.num_images = 0
-        ######################## ↑↑↑↑↑↑ ########################
-        
         # self.ln_2 = norm_layer(d_model)
         # mlp_width = int(d_model * mlp_ratio)
         # self.mlp = nn.Sequential(OrderedDict([
@@ -438,34 +441,14 @@ class ResidualAttentionBlock(nn.Module):
             k_x: Optional[torch.Tensor] = None,
             v_x: Optional[torch.Tensor] = None,
             attn_mask: Optional[torch.Tensor] = None,
-            sim = False
+            record_positive=False
     ):
         k_x = self.ln_1_kv(k_x) if hasattr(self, "ln_1_kv") and k_x is not None else None
         v_x = self.ln_1_kv(v_x) if hasattr(self, "ln_1_kv") and v_x is not None else None
         x = q_x + self.ls_1(self.attention(q_x=self.ln_1(q_x), k_x=k_x, v_x=v_x, attn_mask=attn_mask))
         
         # x = self.mlp(self.ln_2(x)) + x
-        x = self.mlp(x)
-        
-        # if sim:
-        #     # 先对channel归一化
-        #     x_norm = F.normalize(x.transpose(-1, -2), p=2, dim=2)
-            
-        #     # 计算inner product
-        #     cosine_sim = x_norm @ x_norm.transpose(-1,-2) 
-            
-        #     # 减去对角线上的值（自身对自身的相似度）
-        #     cosine_sim = cosine_sim - torch.eye(x_norm.shape[-2]).to(x_norm.device).unsqueeze(0)
-            
-        #     # 每个image取平均
-        #     cosine_sim = cosine_sim.sum(dim=(-1,-2))/(cosine_sim.shape[-1]*(cosine_sim.shape[-2]-1))
-            
-        #     # 把所有batch加起来 cosine_sim = batch * average_cosine_sim
-        #     cosine_sim = cosine_sim.sum()
-            
-        #     self.avg_cosine_sim = self.avg_cosine_sim + cosine_sim
-        #     self.num_images = self.num_images + x_norm.shape[0]
-        #     print(f"Average Cosine Similarity over {self.num_images} images is {self.avg_cosine_sim.item()/self.num_images}")
+        x = self.mlp(x, record_positive)
         
         return x
         
@@ -477,6 +460,9 @@ class ResidualAttentionBlock(nn.Module):
         
     def adapt_gamma(self, gamma):
         self.mlp.adapt_gamma(gamma)
+        
+    def generate_mask(self):
+        self.mlp.generate_mask()
 
 
 class CustomResidualAttentionBlock(nn.Module):
@@ -576,17 +562,19 @@ class Transformer(nn.Module):
             return self.resblocks[0].mlp.c_fc.int8_original_dtype
         return self.resblocks[0].mlp.c_fc.weight.dtype
 
-    def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None, sim=False):
+    def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None, record_positive=False):
         if not self.batch_first:
             x = x.transpose(0, 1).contiguous()    # NLD -> LND
         for i, r in enumerate(self.resblocks):
             if self.grad_checkpointing and not torch.jit.is_scripting():
                 # TODO: handle kwargs https://github.com/pytorch/pytorch/issues/79887#issuecomment-1161758372
-                x = checkpoint(r, x, None, None, attn_mask, sim)
+                # if record_positive:
+                #     print(f"Layer {i}:")
+                x = checkpoint(r, x, None, None, attn_mask, record_positive)
             else:
-                if sim:
-                    print(f"Layer {i}:")
-                x = r(x, attn_mask=attn_mask, sim=sim)
+                # if record_positive:
+                #     print(f"Layer {i}:")
+                x = r(x, attn_mask=attn_mask, record_positive=record_positive)
         if not self.batch_first:
             x = x.transpose(0, 1)    # LND -> NLD
         return x
@@ -599,6 +587,10 @@ class Transformer(nn.Module):
     def adapt_gamma(self, gamma):
         for blk in self.resblocks:
             blk.adapt_gamma(gamma)
+    
+    def generate_mask(self):
+        for blk in self.resblocks:
+            blk.generate_mask()
         
 
 class CustomTransformer(nn.Module):
@@ -865,7 +857,7 @@ class VisionTransformer(nn.Module):
 
         return pooled, tokens
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, record_positive=False):
         x = self.conv1(x)  # shape = [*, width, grid, grid]
         x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
         x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
@@ -877,7 +869,7 @@ class VisionTransformer(nn.Module):
 
         x = self.patch_dropout(x)
         x = self.ln_pre(x)
-        x = self.transformer(x)#, sim=True)
+        x = self.transformer(x, record_positive=record_positive)
 
         if self.attn_pool is not None:
             if self.attn_pool_contrastive is not None:
@@ -915,6 +907,9 @@ class VisionTransformer(nn.Module):
     
     def adapt_gamma(self, gamma):
         self.transformer.adapt_gamma(gamma)
+        
+    def generate_mask(self):
+        self.transformer.generate_mask()
         
 
 def text_global_pool(x, text: Optional[torch.Tensor] = None, pool_type: str = 'argmax'):

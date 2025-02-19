@@ -678,6 +678,23 @@ def main(args):
             
         evaluate(model, data, start_epoch, args, tb_writer=writer, tokenizer=tokenizer)
         return
+    
+    # 提前搞masking
+    if args.finetune_repa:
+        print("Pre-calculating channel distribution...")
+        with torch.no_grad():
+            finetune_data = get_data(
+                args,
+                (preprocess_train, preprocess_val),
+                epoch=start_epoch,
+                tokenizer=tokenizer,
+            )["imagenet-val"].dataloader
+            for i, batch in enumerate(finetune_data):
+                images, _ = batch
+                images = images.to(device=torch.device(args.device), non_blocking=True)
+                model.module.visual(images, record_positive=True)
+            model.module.visual.generate_mask()
+        print("Generated masks for each FFN layer!")
         
     loss = create_loss(args)
 
