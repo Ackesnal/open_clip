@@ -510,6 +510,11 @@ def parse_args(args):
         default=False,
         action="store_true",
     )
+    parser.add_argument(
+        "--finetune_repa",
+        default=False,
+        action="store_true",
+    )
     
     args = parser.parse_args(args)
 
