@@ -184,6 +184,9 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                 if args.grad_clip_norm is not None:
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_norm, norm_type=2.0)
+                # for name, param in model.module.named_parameters():
+                #     if param.requires_grad:
+                #         print(f"{name}: mean: {param.grad.mean().item()}, max: {param.grad.max().item()}, min: {param.grad.min().item()}, norm: {param.grad.norm().item()}")
                 scaler.step(optimizer)
             scaler.update()
         else:
@@ -227,25 +230,25 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                 for param_group in optimizer.param_groups:
                     if param_group["name"] == "repa_decay":
                         lr_repa = param_group["lr"]
-                    if param_group["name"] == "base_decay":
+                    elif param_group["name"] == "base_decay":
                         lr_base = param_group["lr"]
                 logging.info(
                     f"Train Epoch: {epoch} [{num_samples:>{sample_digits}}/{samples_per_epoch} ({percent_complete:.0f}%)] "
                     f"Data (t): {data_time_m.avg:.3f} "
                     f"Batch (t): {batch_time_m.avg:.3f}, {samples_per_second:#g}/s, {samples_per_second_per_gpu:#g}/s/gpu "
-                    f"LR RePa: {lr_repa:6f} "
-                    f"LR Backbone: {lr_base:6f} "
+                    f"LR RePa: {lr_repa:.8f} "
+                    f"LR Backbone: {lr_base:.8f} "
                     f"Logit Scale: {logit_scale_scalar:.3f} " 
-                    f"SLAB Gamma: {gamma:.3f} " + loss_log
+                    f"SLAB Gamma: {gamma:.4f} " + loss_log
                 )
             else:
                 logging.info(
                     f"Train Epoch: {epoch} [{num_samples:>{sample_digits}}/{samples_per_epoch} ({percent_complete:.0f}%)] "
                     f"Data (t): {data_time_m.avg:.3f} "
                     f"Batch (t): {batch_time_m.avg:.3f}, {samples_per_second:#g}/s, {samples_per_second_per_gpu:#g}/s/gpu "
-                    f"LR: {optimizer.param_groups[0]['lr']:6f} "
+                    f"LR: {optimizer.param_groups[0]['lr']:.8f} "
                     f"Logit Scale: {logit_scale_scalar:.3f} " 
-                    f"SLAB Gamma: {gamma:.3f} " + loss_log
+                    f"SLAB Gamma: {gamma:.4f} " + loss_log
                 )
 
             # Save train loss / etc. Using non avg meter values as loggers have their own smoothing

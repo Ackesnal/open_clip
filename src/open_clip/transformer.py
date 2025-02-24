@@ -169,7 +169,7 @@ class Attention(nn.Module):
                 q = q * self.scale
                 attn = torch.bmm(q, k.transpose(-1, -2))
                 if attn_mask is not None:
-                    attn += attn_mask
+                    attn += attn_mask         
                 attn = attn.softmax(dim=-1)
                 attn = self.attn_drop(attn)
                 x = torch.bmm(attn, v)
@@ -431,9 +431,9 @@ class ResidualAttentionBlock(nn.Module):
         v_x = v_x if v_x is not None else q_x
 
         attn_mask = attn_mask.to(q_x.dtype) if attn_mask is not None else None
-        return self.attn(
-            q_x, k_x, v_x, need_weights=False, attn_mask=attn_mask
-        )[0]
+        attn_x = self.attn(q_x, k_x, v_x, need_weights=True, attn_mask=attn_mask)
+         
+        return attn_x[0]
 
     def forward(
             self,
@@ -728,6 +728,9 @@ class VisionTransformer(nn.Module):
             idle_ratio = [idle_ratio for _ in range(layers)]
         elif heuristic == "linear":
             idle_ratio = [(2*idle_ratio-1) + (2-2*idle_ratio) / (layers-1) * (i+1) for i in range(layers-1)] + [0.0]
+            # print(idle_ratio, sum(idle_ratio))
+        elif heuristic == "half":
+            idle_ratio = [0.25 for _ in range(layers//2)] + [(idle_ratio*2-0.25) for _ in range(layers//2)]
             # print(idle_ratio, sum(idle_ratio))
             
         self.transformer = Transformer(

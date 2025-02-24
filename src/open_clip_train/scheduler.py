@@ -74,7 +74,7 @@ def finetune_lr(optimizer, base_lr, warmup_length, steps):
                 if "repa" in param_group["name"]:
                     param_group["lr"] = lr
                 else:
-                    param_group["lr"] = max(0.01 * lr, 1e-8)
+                    param_group["lr"] = 0.1 * lr
             # print(f"LR for RePa parts is {lr}, LR for other parts is {0.0}")
         return 
 
