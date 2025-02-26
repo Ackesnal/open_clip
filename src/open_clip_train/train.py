@@ -181,12 +181,22 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                 with optimizer.skip_synchronize():
                     scaler.step(optimizer)
             else:
+                # if torch.cuda.current_device() == 0:
+                #     print("Before:")
+                #     for name, param in model.named_parameters():
+                #         if param.requires_grad:
+                #             print(f"{name}: nan: {param.grad.isnan().sum().item()} mean: {param.grad.mean().item()}, max: {param.grad.max().item()}, min: {param.grad.min().item()}, norm: {param.grad.norm().item()}")
+                
                 if args.grad_clip_norm is not None:
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_norm, norm_type=2.0)
-                # for name, param in model.module.named_parameters():
-                #     if param.requires_grad:
-                #         print(f"{name}: mean: {param.grad.mean().item()}, max: {param.grad.max().item()}, min: {param.grad.min().item()}, norm: {param.grad.norm().item()}")
+                
+                # if torch.cuda.current_device() == 0:
+                #     print("After:")
+                #     for name, param in model.named_parameters():
+                #         if param.requires_grad:
+                #             print(f"{name}: nan: {param.grad.isnan().sum().item()} mean: {param.grad.mean().item()}, max: {param.grad.max().item()}, min: {param.grad.min().item()}, norm: {param.grad.norm().item()}")
+                            
                 scaler.step(optimizer)
             scaler.update()
         else:
@@ -226,7 +236,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             )
             samples_per_second = args.accum_freq * args.batch_size * args.world_size / batch_time_m.val
             samples_per_second_per_gpu = args.accum_freq * args.batch_size / batch_time_m.val
-            if args.finetune_repa:
+            if False:# args.finetune_repa:
                 for param_group in optimizer.param_groups:
                     if param_group["name"] == "repa_decay":
                         lr_repa = param_group["lr"]

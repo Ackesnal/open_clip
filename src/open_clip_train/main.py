@@ -336,9 +336,17 @@ def main(args):
             freeze_layer_norm=args.lock_text_freeze_layer_norm)
     if args.finetune_repa:
         for name, param in model.named_parameters():
-            if 'visual' not in name and "logit_scale" not in name:
-                # text transformer梯度置0
-                param.requires_grad = False
+            if "visual" in name:
+                if "class_embedding" in name or "positional_embedding" in name or "conv1" in name or "ln_pre" in name:
+                    param.requires_grad = False
+            elif "transformer" in name:
+                if "embedding" in name:
+                    param.requires_grad = False
+            elif "token_embedding" in name or "positional_embedding" in name:
+                    param.requires_grad = False
+            # if 'visual' not in name and "logit_scale" not in name:
+            #     # text transformer梯度置0
+            #     param.requires_grad = False
             
     if args.grad_checkpointing:
         model.set_grad_checkpointing()
@@ -371,53 +379,135 @@ def main(args):
     scaler = None
 
     def get_param_groups(model, weight_decay):
-        decay = []
-        no_decay = []
-        repa_decay = []
-        repa_no_decay = []
+        # decay = []
+        # no_decay = []
+        # repa_decay = []
+        # repa_no_decay = []
+        # for name, param in model.named_parameters():
+            # if not param.requires_grad:
+            #     # 不更新本来就不需要梯度的
+            #     continue
+            # elif 'visual' not in name and "logit_scale" not in name:
+            #     # 不更新text transformer
+            #     continue
+            # elif 'class_embedding' in name:
+            #     # 不更新cls token embedding
+            #     continue  
+            # elif 'positional_embedding' in name:
+            #     # 不更新positional embedding
+            #     continue
+            # elif 'transformer' in name and 'mlp.c_proj' in name:
+            #     # 正常更新mlp的输出层
+            #     if len(param.shape) == 1 or name.endswith(".bias"):
+            #         repa_no_decay.append(param)
+            #     else:
+            #         repa_decay.append(param)
+            # elif 'transformer' in name and 'mlp.c_fc' in name:
+            #     # 正常更新mlp的输出层
+            #     if len(param.shape) == 1 or name.endswith(".bias"):
+            #         repa_no_decay.append(param)
+            #     else:
+            #         repa_decay.append(param)
+            # elif 'transformer' in name and 'bn' in name:
+            #     # 正常更新bn
+            #     if len(param.shape) == 1 or name.endswith(".bias"):
+            #         repa_no_decay.append(param)
+            #     else:
+            #         repa_decay.append(param)
+            # elif len(param.shape) == 1 or name.endswith(".bias"):
+            #     # bias的decay为0
+            #     no_decay.append(param)
+            # else:
+            #     # 其他部分的decay正常
+            #     decay.append(param)
+        # return [
+        #     {'params': repa_no_decay, 'weight_decay': 0., 'name': 'repa_no_decay'},
+        #     {'params': repa_decay, 'weight_decay': weight_decay, 'name': 'repa_decay'},
+        #     {'params': no_decay, 'weight_decay': 0., 'name': 'base_no_decay'},
+        #     {'params': decay, 'weight_decay': weight_decay, 'name': 'base_decay'}
+        #     ]
+        lr_decay_weight_decay = {}
+        lr_decay_weight_nodecay = {}
         for name, param in model.named_parameters():
+            # if torch.cuda.current_device() == 0:
+            #     print(name)
+                    
             if not param.requires_grad:
-                # 不更新本来就不需要梯度的
                 continue
-            elif 'visual' not in name and "logit_scale" not in name:
-                # 不更新text transformer
-                continue
-            elif 'class_embedding' in name:
-                # 不更新cls token embedding
-                continue  
-            elif 'positional_embedding' in name:
-                # 不更新positional embedding
-                continue
-            elif 'transformer' in name and 'mlp.c_proj' in name:
-                # 正常更新mlp的输出层
-                if len(param.shape) == 1 or name.endswith(".bias"):
-                    repa_no_decay.append(param)
+            
+            elif "visual" in name:
+                if "class_embedding" in name or "positional_embedding" in name or "conv1" in name or "ln_pre" in name:
+                    continue
+                elif "proj" in name or "ln_post" in name:
+                    if len(param.shape) == 1 or name.endswith("bias"):
+                        # bias的weight decay为0
+                        if -1 not in lr_decay_weight_nodecay:
+                            lr_decay_weight_nodecay[-1] = [param]
+                        else:
+                            lr_decay_weight_nodecay[-1].append(param)
+                    else:
+                        # 其他部分的weight decay正常
+                        if -1 not in lr_decay_weight_decay:
+                            lr_decay_weight_decay[-1] = [param]
+                        else:
+                            lr_decay_weight_decay[-1].append(param)
                 else:
-                    repa_decay.append(param)
-            elif 'transformer' in name and 'mlp.c_fc' in name:
-                # 正常更新mlp的输出层
-                if len(param.shape) == 1 or name.endswith(".bias"):
-                    repa_no_decay.append(param)
+                    layer = name.split(".")[4]
+                    if len(param.shape) == 1 or name.endswith("bias"):
+                        # bias的weight decay为0
+                        if layer not in lr_decay_weight_nodecay:
+                            lr_decay_weight_nodecay[layer] = [param]
+                        else:
+                            lr_decay_weight_nodecay[layer].append(param)
+                    else:
+                        # 其他部分的weight decay正常
+                        if layer not in lr_decay_weight_decay:
+                            lr_decay_weight_decay[layer] = [param]
+                        else:
+                            lr_decay_weight_decay[layer].append(param)
+                            
+            elif "transformer" in name:
+                if "embedding" in name:
+                    continue
                 else:
-                    repa_decay.append(param)
-            elif 'transformer' in name and 'bn' in name:
-                # 正常更新bn
-                if len(param.shape) == 1 or name.endswith(".bias"):
-                    repa_no_decay.append(param)
-                else:
-                    repa_decay.append(param)
-            elif len(param.shape) == 1 or name.endswith(".bias"):
-                # bias的decay为0
-                no_decay.append(param)
+                    layer = name.split(".")[3]
+                    if len(param.shape) == 1 or name.endswith("bias"):
+                        # bias的weight decay为0
+                        if layer not in lr_decay_weight_nodecay:
+                            lr_decay_weight_nodecay[layer] = [param]
+                        else:
+                            lr_decay_weight_nodecay[layer].append(param)
+                    else:
+                        # 其他部分的weight decay正常
+                        if layer not in lr_decay_weight_decay:
+                            lr_decay_weight_decay[layer] = [param]
+                        else:
+                            lr_decay_weight_decay[layer].append(param)
+                            
             else:
-                # 其他部分的decay正常
-                decay.append(param)
-        return [
-            {'params': repa_no_decay, 'weight_decay': 0., 'name': 'repa_no_decay'},
-            {'params': repa_decay, 'weight_decay': weight_decay, 'name': 'repa_decay'},
-            {'params': no_decay, 'weight_decay': 0., 'name': 'base_no_decay'},
-            {'params': decay, 'weight_decay': weight_decay, 'name': 'base_decay'}
-            ]
+                if "token_embedding" in name or "positional_embedding" in name:
+                    continue
+                else:
+                    if len(param.shape) == 1 or name.endswith("bias") or "logit_scale" in name:
+                        # bias的weight decay为0
+                        if -1 not in lr_decay_weight_nodecay:
+                            lr_decay_weight_nodecay[-1] = [param]
+                        else:
+                            lr_decay_weight_nodecay[-1].append(param)
+                    else:
+                        # 其他部分的weight decay正常
+                        if -1 not in lr_decay_weight_decay:
+                            lr_decay_weight_decay[-1] = [param]
+                        else:
+                            lr_decay_weight_decay[-1].append(param)
+                            
+        param_group = []
+        total_layer = max([int(i) for i in lr_decay_weight_decay.keys()])
+        for i in lr_decay_weight_decay.keys():
+            param_group.append({'params': lr_decay_weight_decay[i], 'weight_decay': weight_decay, 'name': f'lr_decay_weight_decay_{total_layer-int(i)+1 if int(i) >= 0 else 0}_{i}'})
+        for i in lr_decay_weight_nodecay.keys():
+            param_group.append({'params': lr_decay_weight_nodecay[i], 'weight_decay': 0., 'name': f'lr_decay_weight_nodecay_{total_layer-int(i)+1 if int(i) >= 0 else 0}_{i}'})
+        return param_group
         
     if args.train_data or args.dataset_type == "synthetic":
         assert not args.trace, 'Cannot train with traced model'
@@ -508,40 +598,31 @@ def main(args):
             if not args.distributed and next(iter(sd.items()))[0].startswith('module'):
                 sd = {k[len('module.'):]: v for k, v in sd.items()}
             
-            if args.finetune_repa:
-                # finetune RePaCLIP from OpenCLIP
-                # load vanilla module to the new RePaCLIP model
-                del_key_list = []
-                for key, value in sd.items():
-                    if "ln_2" in key:
-                        del_key_list.append(key)
-                for key in del_key_list:
-                    new_key = key.split("ln_2")
-                    new_key = new_key[0] + "mlp.ln" + new_key[1]
-                    sd[new_key] = sd[key]
-                    sd.pop(key)
-                    
-                miss_key_list = []
-                for key, value in sd.items():
-                    if "module" not in key:
-                        miss_key_list.append(key)
-                for key in miss_key_list:
-                    new_key = "module." + key
-                    sd[new_key] = sd[key]
-                    sd.pop(key)
-            
-                if len(del_key_list) > 0 or len(miss_key_list) > 0:
-                    model.load_state_dict(sd, strict=False)
-                    start_epoch = 0
-                else:
-                    model.load_state_dict(sd, strict=True)
-                    if optimizer is not None:
-                        optimizer.load_state_dict(checkpoint["optimizer"])
-                    if scaler is not None and 'scaler' in checkpoint:
-                        scaler.load_state_dict(checkpoint['scaler'])
-                    logging.info(f"=> resuming checkpoint '{args.resume}' (epoch {start_epoch})")
+            # finetune RePaCLIP from OpenCLIP
+            # load vanilla module to the new RePaCLIP model
+            del_key_list = []
+            for key, value in sd.items():
+                if "ln_2" in key:
+                    del_key_list.append(key)
+            for key in del_key_list:
+                new_key = key.split("ln_2")
+                new_key = new_key[0] + "mlp.ln" + new_key[1]
+                sd[new_key] = sd[key]
+                sd.pop(key)
+                
+            miss_key_list = []
+            for key, value in sd.items():
+                if "module" not in key:
+                    miss_key_list.append(key)
+            for key in miss_key_list:
+                new_key = "module." + key
+                sd[new_key] = sd[key]
+                sd.pop(key)
+        
+            if len(del_key_list) > 0 or len(miss_key_list) > 0:
+                model.load_state_dict(sd, strict=False)
+                start_epoch = 0
             else:
-                # finetune RePaCLIP from RePaCLIP
                 model.load_state_dict(sd, strict=True)
                 if optimizer is not None:
                     optimizer.load_state_dict(checkpoint["optimizer"])
@@ -551,46 +632,34 @@ def main(args):
         else:
             # resuming a checkpoint w/ only model weights
             
-            if args.finetune_repa:
-                # load vanilla module to the new RePaCLIP model
-                if "state_dict" in checkpoint:
-                    sd = checkpoint["state_dict"]
-                else:
-                    sd = checkpoint
-                    
-                del_key_list = []
-                for key, value in sd.items():
-                    if "ln_2" in key:
-                        del_key_list.append(key)
-                for key in del_key_list:
-                    new_key = key.split("ln_2")
-                    new_key = new_key[0] + "mlp.ln" + new_key[1]
-                    sd[new_key] = sd[key]
-                    sd.pop(key)
-                
-                miss_key_list = []
-                for key, value in sd.items():
-                    if "module" not in key:
-                        miss_key_list.append(key)
-                for key in miss_key_list:
-                    new_key = "module." + key
-                    sd[new_key] = sd[key]
-                    sd.pop(key)
-                    
-                # loading a bare (model only) checkpoint for fine-tune or evaluation
-                model.load_state_dict(sd, strict=False)
-                logging.info(f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})")
-                
+            if "state_dict" in checkpoint:
+                sd = checkpoint["state_dict"]
             else:
-                # load vanilla module to the new RePaCLIP model
-                if "state_dict" in checkpoint:
-                    sd = checkpoint["state_dict"]
-                else:
-                    sd = checkpoint
+                sd = checkpoint
+                    
+            del_key_list = []
+            for key, value in sd.items():
+                if "ln_2" in key:
+                    del_key_list.append(key)
+            for key in del_key_list:
+                new_key = key.split("ln_2")
+                new_key = new_key[0] + "mlp.ln" + new_key[1]
+                sd[new_key] = sd[key]
+                sd.pop(key)
                 
-                # loading a bare (model only) checkpoint for fine-tune or evaluation
-                model.load_state_dict(sd, strict=False)
-                logging.info(f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})")
+            miss_key_list = []
+            for key, value in sd.items():
+                if "module" not in key:
+                    miss_key_list.append(key)
+            for key in miss_key_list:
+                new_key = "module." + key
+                sd[new_key] = sd[key]
+                sd.pop(key)
+                    
+            # loading a bare (model only) checkpoint for fine-tune or evaluation
+            model.load_state_dict(sd, strict=False)
+            logging.info(f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})")
+
                 
 
     # initialize datasets

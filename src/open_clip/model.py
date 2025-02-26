@@ -331,6 +331,9 @@ class CLIP(nn.Module):
         image_features = self.encode_image(image, normalize=True) if image is not None else None
         text_features = self.encode_text(text, normalize=True) if text is not None else None
         
+        # print(f"Image: Max: {image_features.max().item()} Min: {image_features.min().item()} Var: {image_features.var().item()}")
+        # print(f"Text: Max: {text_features.max().item()} Min: {text_features.min().item()} Var: {text_features.var().item()}")
+        
         if self.output_dict:
             out_dict = {
                 "image_features": image_features,

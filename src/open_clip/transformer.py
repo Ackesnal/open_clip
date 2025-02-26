@@ -410,7 +410,6 @@ class ResidualAttentionBlock(nn.Module):
                        feature_norm = feature_norm, slab = slab,)
         self.act_layer = act_layer
         
-        
         # self.ln_2 = norm_layer(d_model)
         # mlp_width = int(d_model * mlp_ratio)
         # self.mlp = nn.Sequential(OrderedDict([
