@@ -336,17 +336,17 @@ def main(args):
             freeze_layer_norm=args.lock_text_freeze_layer_norm)
     if args.finetune_repa:
         for name, param in model.named_parameters():
-            if "visual" in name:
-                if "class_embedding" in name or "positional_embedding" in name or "conv1" in name or "ln_pre" in name:
-                    param.requires_grad = False
-            elif "transformer" in name:
-                if "embedding" in name:
-                    param.requires_grad = False
-            elif "token_embedding" in name or "positional_embedding" in name:
-                    param.requires_grad = False
-            # if 'visual' not in name and "logit_scale" not in name:
-            #     # text transformer梯度置0
-            #     param.requires_grad = False
+            # if "visual" in name:
+            #     if "class_embedding" in name or "positional_embedding" in name or "conv1" in name or "ln_pre" in name:
+            #         param.requires_grad = False
+            # elif "transformer" in name:
+            #     if "embedding" in name:
+            #         param.requires_grad = False
+            # elif "token_embedding" in name or "positional_embedding" in name:
+            #         param.requires_grad = False
+            if 'visual' not in name and "logit_scale" not in name:
+                # text transformer梯度置0
+                param.requires_grad = False
             
     if args.grad_checkpointing:
         model.set_grad_checkpointing()
@@ -379,135 +379,150 @@ def main(args):
     scaler = None
 
     def get_param_groups(model, weight_decay):
-        # decay = []
-        # no_decay = []
-        # repa_decay = []
-        # repa_no_decay = []
-        # for name, param in model.named_parameters():
-            # if not param.requires_grad:
-            #     # 不更新本来就不需要梯度的
-            #     continue
-            # elif 'visual' not in name and "logit_scale" not in name:
-            #     # 不更新text transformer
-            #     continue
-            # elif 'class_embedding' in name:
-            #     # 不更新cls token embedding
-            #     continue  
-            # elif 'positional_embedding' in name:
-            #     # 不更新positional embedding
-            #     continue
-            # elif 'transformer' in name and 'mlp.c_proj' in name:
-            #     # 正常更新mlp的输出层
-            #     if len(param.shape) == 1 or name.endswith(".bias"):
-            #         repa_no_decay.append(param)
-            #     else:
-            #         repa_decay.append(param)
-            # elif 'transformer' in name and 'mlp.c_fc' in name:
-            #     # 正常更新mlp的输出层
-            #     if len(param.shape) == 1 or name.endswith(".bias"):
-            #         repa_no_decay.append(param)
-            #     else:
-            #         repa_decay.append(param)
-            # elif 'transformer' in name and 'bn' in name:
-            #     # 正常更新bn
-            #     if len(param.shape) == 1 or name.endswith(".bias"):
-            #         repa_no_decay.append(param)
-            #     else:
-            #         repa_decay.append(param)
-            # elif len(param.shape) == 1 or name.endswith(".bias"):
-            #     # bias的decay为0
-            #     no_decay.append(param)
-            # else:
-            #     # 其他部分的decay正常
-            #     decay.append(param)
+        decay = []
+        no_decay = []
+        repa_decay = []
+        repa_no_decay = []
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                # 不更新本来就不需要梯度的
+                continue
+            # print(name)
+            if len(param.shape) == 1 or name.endswith(".bias"):
+                # bias的decay为0
+                no_decay.append(param)
+            else:
+                # 其他部分的decay正常
+                decay.append(param)
+        return [
+            {'params': no_decay, 'weight_decay': 0., 'name': 'no_decay'},
+            {'params': decay, 'weight_decay': weight_decay, 'name': 'decay'}
+        ]
+        #     if not param.requires_grad:
+        #         # 不更新本来就不需要梯度的
+        #         continue
+        #     elif 'visual' not in name and "logit_scale" not in name:
+        #         # 不更新text transformer
+        #         continue
+        #     elif 'class_embedding' in name:
+        #         # 不更新cls token embedding
+        #         continue  
+        #     elif 'positional_embedding' in name:
+        #         # 不更新positional embedding
+        #         continue
+        #     elif 'transformer' in name and 'mlp.c_proj' in name:
+        #         # 正常更新mlp的输出层
+        #         if len(param.shape) == 1 or name.endswith(".bias"):
+        #             repa_no_decay.append(param)
+        #         else:
+        #             repa_decay.append(param)
+        #     elif 'transformer' in name and 'mlp.c_fc' in name:
+        #         # 正常更新mlp的输出层
+        #         if len(param.shape) == 1 or name.endswith(".bias"):
+        #             repa_no_decay.append(param)
+        #         else:
+        #             repa_decay.append(param)
+        #     elif 'transformer' in name and 'bn' in name:
+        #         # 正常更新bn
+        #         if len(param.shape) == 1 or name.endswith(".bias"):
+        #             repa_no_decay.append(param)
+        #         else:
+        #             repa_decay.append(param)
+        #     elif len(param.shape) == 1 or name.endswith(".bias"):
+        #         # bias的decay为0
+        #         no_decay.append(param)
+        #     else:
+        #         # 其他部分的decay正常
+        #         decay.append(param)
         # return [
         #     {'params': repa_no_decay, 'weight_decay': 0., 'name': 'repa_no_decay'},
         #     {'params': repa_decay, 'weight_decay': weight_decay, 'name': 'repa_decay'},
         #     {'params': no_decay, 'weight_decay': 0., 'name': 'base_no_decay'},
         #     {'params': decay, 'weight_decay': weight_decay, 'name': 'base_decay'}
         #     ]
-        lr_decay_weight_decay = {}
-        lr_decay_weight_nodecay = {}
-        for name, param in model.named_parameters():
-            # if torch.cuda.current_device() == 0:
-            #     print(name)
+        
+        # lr_decay_weight_decay = {}
+        # lr_decay_weight_nodecay = {}
+        # for name, param in model.named_parameters():
+        #     # if torch.cuda.current_device() == 0:
+        #     #     print(name)
                     
-            if not param.requires_grad:
-                continue
+        #     if not param.requires_grad:
+        #         continue
             
-            elif "visual" in name:
-                if "class_embedding" in name or "positional_embedding" in name or "conv1" in name or "ln_pre" in name:
-                    continue
-                elif "proj" in name or "ln_post" in name:
-                    if len(param.shape) == 1 or name.endswith("bias"):
-                        # bias的weight decay为0
-                        if -1 not in lr_decay_weight_nodecay:
-                            lr_decay_weight_nodecay[-1] = [param]
-                        else:
-                            lr_decay_weight_nodecay[-1].append(param)
-                    else:
-                        # 其他部分的weight decay正常
-                        if -1 not in lr_decay_weight_decay:
-                            lr_decay_weight_decay[-1] = [param]
-                        else:
-                            lr_decay_weight_decay[-1].append(param)
-                else:
-                    layer = name.split(".")[4]
-                    if len(param.shape) == 1 or name.endswith("bias"):
-                        # bias的weight decay为0
-                        if layer not in lr_decay_weight_nodecay:
-                            lr_decay_weight_nodecay[layer] = [param]
-                        else:
-                            lr_decay_weight_nodecay[layer].append(param)
-                    else:
-                        # 其他部分的weight decay正常
-                        if layer not in lr_decay_weight_decay:
-                            lr_decay_weight_decay[layer] = [param]
-                        else:
-                            lr_decay_weight_decay[layer].append(param)
+        #     elif "visual" in name:
+        #         if "class_embedding" in name or "positional_embedding" in name or "conv1" in name or "ln_pre" in name:
+        #             continue
+        #         elif "proj" in name or "ln_post" in name:
+        #             if len(param.shape) == 1 or name.endswith("bias"):
+        #                 # bias的weight decay为0
+        #                 if -1 not in lr_decay_weight_nodecay:
+        #                     lr_decay_weight_nodecay[-1] = [param]
+        #                 else:
+        #                     lr_decay_weight_nodecay[-1].append(param)
+        #             else:
+        #                 # 其他部分的weight decay正常
+        #                 if -1 not in lr_decay_weight_decay:
+        #                     lr_decay_weight_decay[-1] = [param]
+        #                 else:
+        #                     lr_decay_weight_decay[-1].append(param)
+        #         else:
+        #             layer = name.split(".")[4]
+        #             if len(param.shape) == 1 or name.endswith("bias"):
+        #                 # bias的weight decay为0
+        #                 if layer not in lr_decay_weight_nodecay:
+        #                     lr_decay_weight_nodecay[layer] = [param]
+        #                 else:
+        #                     lr_decay_weight_nodecay[layer].append(param)
+        #             else:
+        #                 # 其他部分的weight decay正常
+        #                 if layer not in lr_decay_weight_decay:
+        #                     lr_decay_weight_decay[layer] = [param]
+        #                 else:
+        #                     lr_decay_weight_decay[layer].append(param)
                             
-            elif "transformer" in name:
-                if "embedding" in name:
-                    continue
-                else:
-                    layer = name.split(".")[3]
-                    if len(param.shape) == 1 or name.endswith("bias"):
-                        # bias的weight decay为0
-                        if layer not in lr_decay_weight_nodecay:
-                            lr_decay_weight_nodecay[layer] = [param]
-                        else:
-                            lr_decay_weight_nodecay[layer].append(param)
-                    else:
-                        # 其他部分的weight decay正常
-                        if layer not in lr_decay_weight_decay:
-                            lr_decay_weight_decay[layer] = [param]
-                        else:
-                            lr_decay_weight_decay[layer].append(param)
+        #     elif "transformer" in name:
+        #         if "embedding" in name:
+        #             continue
+        #         else:
+        #             layer = name.split(".")[3]
+        #             if len(param.shape) == 1 or name.endswith("bias"):
+        #                 # bias的weight decay为0
+        #                 if layer not in lr_decay_weight_nodecay:
+        #                     lr_decay_weight_nodecay[layer] = [param]
+        #                 else:
+        #                     lr_decay_weight_nodecay[layer].append(param)
+        #             else:
+        #                 # 其他部分的weight decay正常
+        #                 if layer not in lr_decay_weight_decay:
+        #                     lr_decay_weight_decay[layer] = [param]
+        #                 else:
+        #                     lr_decay_weight_decay[layer].append(param)
                             
-            else:
-                if "token_embedding" in name or "positional_embedding" in name:
-                    continue
-                else:
-                    if len(param.shape) == 1 or name.endswith("bias") or "logit_scale" in name:
-                        # bias的weight decay为0
-                        if -1 not in lr_decay_weight_nodecay:
-                            lr_decay_weight_nodecay[-1] = [param]
-                        else:
-                            lr_decay_weight_nodecay[-1].append(param)
-                    else:
-                        # 其他部分的weight decay正常
-                        if -1 not in lr_decay_weight_decay:
-                            lr_decay_weight_decay[-1] = [param]
-                        else:
-                            lr_decay_weight_decay[-1].append(param)
+        #     else:
+        #         if "token_embedding" in name or "positional_embedding" in name:
+        #             continue
+        #         else:
+        #             if len(param.shape) == 1 or name.endswith("bias") or "logit_scale" in name:
+        #                 # bias的weight decay为0
+        #                 if -1 not in lr_decay_weight_nodecay:
+        #                     lr_decay_weight_nodecay[-1] = [param]
+        #                 else:
+        #                     lr_decay_weight_nodecay[-1].append(param)
+        #             else:
+        #                 # 其他部分的weight decay正常
+        #                 if -1 not in lr_decay_weight_decay:
+        #                     lr_decay_weight_decay[-1] = [param]
+        #                 else:
+        #                     lr_decay_weight_decay[-1].append(param)
                             
-        param_group = []
-        total_layer = max([int(i) for i in lr_decay_weight_decay.keys()])
-        for i in lr_decay_weight_decay.keys():
-            param_group.append({'params': lr_decay_weight_decay[i], 'weight_decay': weight_decay, 'name': f'lr_decay_weight_decay_{total_layer-int(i)+1 if int(i) >= 0 else 0}_{i}'})
-        for i in lr_decay_weight_nodecay.keys():
-            param_group.append({'params': lr_decay_weight_nodecay[i], 'weight_decay': 0., 'name': f'lr_decay_weight_nodecay_{total_layer-int(i)+1 if int(i) >= 0 else 0}_{i}'})
-        return param_group
+        # param_group = []
+        # total_layer = max([int(i) for i in lr_decay_weight_decay.keys()])
+        # for i in lr_decay_weight_decay.keys():
+        #     param_group.append({'params': lr_decay_weight_decay[i], 'weight_decay': weight_decay, 'name': f'lr_decay_weight_decay_{total_layer-int(i)+1 if int(i) >= 0 else 0}_{i}'})
+        # for i in lr_decay_weight_nodecay.keys():
+        #     param_group.append({'params': lr_decay_weight_nodecay[i], 'weight_decay': 0., 'name': f'lr_decay_weight_nodecay_{total_layer-int(i)+1 if int(i) >= 0 else 0}_{i}'})
+        # return param_group
         
     if args.train_data or args.dataset_type == "synthetic":
         assert not args.trace, 'Cannot train with traced model'
@@ -676,7 +691,7 @@ def main(args):
     scheduler = None
     if 'train' in data and optimizer is not None:
         total_steps = (data["train"].dataloader.num_batches // args.accum_freq) * args.epochs
-        if args.finetune_repa:
+        if False: #args.finetune_repa:
             scheduler = finetune_lr(optimizer, args.lr, args.warmup, total_steps)
         elif args.lr_scheduler == "cosine":
             scheduler = cosine_lr(optimizer, args.lr, args.warmup, total_steps)
@@ -693,7 +708,7 @@ def main(args):
             logging.error(
                 f'Unknown scheduler, {args.lr_scheduler}. Available options are: cosine, const, const-cooldown.')
             exit(1)
-
+    
     # determine if this worker should save logs and checkpoints. only do so if it is rank == 0
     args.save_logs = args.logs and args.logs.lower() != 'none' and is_master(args)
     writer = None

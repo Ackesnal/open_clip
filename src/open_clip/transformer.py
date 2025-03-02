@@ -728,8 +728,6 @@ class VisionTransformer(nn.Module):
         elif heuristic == "linear":
             idle_ratio = [(2*idle_ratio-1) + (2-2*idle_ratio) / (layers-1) * (i+1) for i in range(layers-1)] + [0.0]
             # print(idle_ratio, sum(idle_ratio))
-        elif heuristic == "linear":
-            idle_ratio = [0.25 for _ in range(layers//2)] + [(idle_ratio*2-0.25) for _ in range(layers//2)]
         elif heuristic == "halflinear":
             idle_ratio = [(idle_ratio*layers*2/(layers//2)-1) + (2-idle_ratio*layers*2/(layers//2))/(layers//2-1)*(i//2) if i%2 ==0 else 0.0 for i in range(layers)]
             # print(idle_ratio, sum(idle_ratio))
