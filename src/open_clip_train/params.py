@@ -511,7 +511,17 @@ def parse_args(args):
         action="store_true",
     )
     parser.add_argument(
-        "--finetune_repa",
+        "--finetune_repa_visual",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
+        "--finetune_repa_all",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
+        "--finetune_repa_mlp",
         default=False,
         action="store_true",
     )

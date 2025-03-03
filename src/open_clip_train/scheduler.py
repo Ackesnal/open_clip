@@ -57,53 +57,53 @@ def cosine_lr(optimizer, base_lr, warmup_length, steps):
 
 
 def finetune_lr(optimizer, base_lr, warmup_length, steps):
-    # def _lr_adjuster(step):
-    #     if step < warmup_length:
-    #         lr = _warmup_lr(base_lr, warmup_length, step)
-    #         for param_group in optimizer.param_groups:
-    #             if "repa" in param_group["name"]:
-                    
-    #                 param_group["lr"] = lr
-    #             else:
-    #                 param_group["lr"] = 0.0
-    #         # print(f"LR for RePa parts is {lr}, LR for other parts is {0.0}")
-    #     else:
-    #         e = step - warmup_length
-    #         es = steps - warmup_length
-    #         lr = 0.5 * (1 + math.cos(math.pi * e / es)) * base_lr
-    #         for param_group in optimizer.param_groups:
-    #             if "repa" in param_group["name"]:
-    #                 param_group["lr"] = lr
-    #             else:
-    #                 param_group["lr"] = 0.1 * lr
-    #         # print(f"LR for RePa parts is {lr}, LR for other parts is {0.0}")
-    #     return 
-    
     def _lr_adjuster(step):
         if step < warmup_length:
             lr = _warmup_lr(base_lr, warmup_length, step)
             for param_group in optimizer.param_groups:
-                layer = int(param_group["name"].split("_")[-1])
-                exp = int(param_group["name"].split("_")[-2])
-                if layer == -1:
+                if "repa" in param_group["name"]:
+                    
                     param_group["lr"] = lr
                 else:
-                    param_group["lr"] = lr * (0.7 ** exp)
-                # print(f"Layer {layer}: {param_group['lr']}", "\n\n")
+                    param_group["lr"] = 0.0
             # print(f"LR for RePa parts is {lr}, LR for other parts is {0.0}")
         else:
             e = step - warmup_length
             es = steps - warmup_length
             lr = 0.5 * (1 + math.cos(math.pi * e / es)) * base_lr
             for param_group in optimizer.param_groups:
-                layer = int(param_group["name"].split("_")[-1])
-                exp = int(param_group["name"].split("_")[-2])
-                if layer == -1:
+                if "repa" in param_group["name"]:
                     param_group["lr"] = lr
                 else:
-                    param_group["lr"] = lr * (0.7 ** exp)
-                # print(f"Layer {layer}: {param_group['lr']}", "\n\n")
+                    param_group["lr"] = 0.01 * lr
             # print(f"LR for RePa parts is {lr}, LR for other parts is {0.0}")
         return 
+    
+    # def _lr_adjuster(step):
+    #     if step < warmup_length:
+    #         lr = _warmup_lr(base_lr, warmup_length, step)
+    #         for param_group in optimizer.param_groups:
+    #             layer = int(param_group["name"].split("_")[-1])
+    #             exp = int(param_group["name"].split("_")[-2])
+    #             if layer == -1:
+    #                 param_group["lr"] = lr
+    #             else:
+    #                 param_group["lr"] = lr * (0.7 ** exp)
+    #             # print(f"Layer {layer}: {param_group['lr']}", "\n\n")
+    #         # print(f"LR for RePa parts is {lr}, LR for other parts is {0.0}")
+    #     else:
+    #         e = step - warmup_length
+    #         es = steps - warmup_length
+    #         lr = 0.5 * (1 + math.cos(math.pi * e / es)) * base_lr
+    #         for param_group in optimizer.param_groups:
+    #             layer = int(param_group["name"].split("_")[-1])
+    #             exp = int(param_group["name"].split("_")[-2])
+    #             if layer == -1:
+    #                 param_group["lr"] = lr
+    #             else:
+    #                 param_group["lr"] = lr * (0.7 ** exp)
+    #             # print(f"Layer {layer}: {param_group['lr']}", "\n\n")
+    #         # print(f"LR for RePa parts is {lr}, LR for other parts is {0.0}")
+    #     return 
 
     return _lr_adjuster

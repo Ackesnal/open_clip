@@ -211,7 +211,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
         # Note: we clamp to 4.6052 = ln(100), as in the original paper.
         with torch.no_grad():
             unwrap_model(model).logit_scale.clamp_(0, math.log(100))
-
+            
         batch_time_m.update(time.time() - end)
         end = time.time()
         batch_count = i_accum + 1
