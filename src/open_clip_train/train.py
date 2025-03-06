@@ -236,7 +236,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             )
             samples_per_second = args.accum_freq * args.batch_size * args.world_size / batch_time_m.val
             samples_per_second_per_gpu = args.accum_freq * args.batch_size / batch_time_m.val
-            if False:# args.finetune_repa:
+            if args.finetune_repa_mlp:
                 for param_group in optimizer.param_groups:
                     if param_group["name"] == "repa_decay":
                         lr_repa = param_group["lr"]
@@ -246,7 +246,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                     f"Train Epoch: {epoch} [{num_samples:>{sample_digits}}/{samples_per_epoch} ({percent_complete:.0f}%)] "
                     f"Data (t): {data_time_m.avg:.3f} "
                     f"Batch (t): {batch_time_m.avg:.3f}, {samples_per_second:#g}/s, {samples_per_second_per_gpu:#g}/s/gpu "
-                    f"LR RePa: {lr_repa:.8f} "
+                    f"LR RePaMLP: {lr_repa:.8f} "
                     f"LR Backbone: {lr_base:.8f} "
                     f"Logit Scale: {logit_scale_scalar:.3f} " 
                     f"SLAB Gamma: {gamma:.4f} " + loss_log
