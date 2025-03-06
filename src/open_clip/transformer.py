@@ -244,7 +244,7 @@ class Mlp(nn.Module):
         
         ######################## ↓↓↓↓↓↓ ########################
         # Channel-idle
-        self.channel_idle = channel_idle
+        self.channel_idle = channel_idle if idle_ratio > 0 else False
         self.act_channels = int(dim_hidden * (1-idle_ratio))
         ######################## ↑↑↑↑↑↑ ########################
         
@@ -272,6 +272,7 @@ class Mlp(nn.Module):
             self.num_batch = 0
             self.mask = nn.Parameter(torch.zeros((1, 1, self.dim_hidden), dtype=torch.bool), requires_grad=False)
             self.mask[:,:,:self.act_channels] = True
+            self.act_norm = nn.BatchNorm1d(self.dim_hidden)
         ######################## ↑↑↑↑↑↑ ########################
             
     def forward(self, x, record_positive=False):
@@ -300,6 +301,7 @@ class Mlp(nn.Module):
             # Activation
             if self.channel_idle:
                 x = torch.where(self.mask, self.act(x), x)
+                x = self.act_norm(x.transpose(-1, -2)).transpose(-1, -2)
             else:
                 x = self.act(x)
         
@@ -445,9 +447,11 @@ class ResidualAttentionBlock(nn.Module):
         k_x = self.ln_1_kv(k_x) if hasattr(self, "ln_1_kv") and k_x is not None else None
         v_x = self.ln_1_kv(v_x) if hasattr(self, "ln_1_kv") and v_x is not None else None
         x = q_x + self.ls_1(self.attention(q_x=self.ln_1(q_x), k_x=k_x, v_x=v_x, attn_mask=attn_mask))
+        # print(f"X after ATTN: max {round(x[0].max().item(), 4)} min {round(x[0].min().item(), 4)} mean {round(x[0].mean().item(), 4)} std {round(x[0].std().item(), 4)}")
         
         # x = self.mlp(self.ln_2(x)) + x
         x = self.mlp(x, record_positive)
+        # print(f"X after MLP: max {round(x[0].max().item(), 4)} min {round(x[0].min().item(), 4)} mean {round(x[0].mean().item(), 4)} std {round(x[0].std().item(), 4)}")
         
         return x
         
@@ -573,6 +577,7 @@ class Transformer(nn.Module):
             else:
                 # if record_positive:
                 #     print(f"Layer {i}:")
+                # print(f"Layer {i}:")
                 x = r(x, attn_mask=attn_mask, record_positive=record_positive)
         if not self.batch_first:
             x = x.transpose(0, 1)    # LND -> NLD
@@ -730,6 +735,9 @@ class VisionTransformer(nn.Module):
             # print(idle_ratio, sum(idle_ratio))
         elif heuristic == "halflinear":
             idle_ratio = [(idle_ratio*layers*2/(layers//2)-1) + (2-idle_ratio*layers*2/(layers//2))/(layers//2-1)*(i//2) if i%2 ==0 else 0.0 for i in range(layers)]
+            # print(idle_ratio, sum(idle_ratio))
+        elif heuristic == "lastlayer":
+            idle_ratio = [idle_ratio if i == layers-1 else 0.0 for i in range(layers)]
             # print(idle_ratio, sum(idle_ratio))
             
         self.transformer = Transformer(

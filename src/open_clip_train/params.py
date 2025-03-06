@@ -481,6 +481,11 @@ def parse_args(args):
         action='store_true',
     )
     parser.add_argument(
+        "--generate_mask",
+        default=False,
+        action='store_true',
+    )
+    parser.add_argument(
         "--idle_ratio",
         default=0.75,
         type=float,

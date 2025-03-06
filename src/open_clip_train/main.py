@@ -518,13 +518,14 @@ def main(args):
                 sd.pop(key)
                 
             miss_key_list = []
-            for key, value in sd.items():
-                if "module" not in key:
-                    miss_key_list.append(key)
-            for key in miss_key_list:
-                new_key = "module." + key
-                sd[new_key] = sd[key]
-                sd.pop(key)
+            if args.distributed:
+                for key, value in sd.items():
+                    if "module" not in key:
+                        miss_key_list.append(key)
+                for key in miss_key_list:
+                    new_key = "module." + key
+                    sd[new_key] = sd[key]
+                    sd.pop(key)
         
             if len(del_key_list) > 0 or len(miss_key_list) > 0:
                 model.load_state_dict(sd, strict=False)
@@ -538,7 +539,6 @@ def main(args):
                 logging.info(f"=> resuming checkpoint '{args.resume}' (epoch {start_epoch})")
         else:
             # resuming a checkpoint w/ only model weights
-            
             if "state_dict" in checkpoint:
                 sd = checkpoint["state_dict"]
             else:
@@ -555,16 +555,21 @@ def main(args):
                 sd.pop(key)
                 
             miss_key_list = []
-            for key, value in sd.items():
-                if "module" not in key:
-                    miss_key_list.append(key)
-            for key in miss_key_list:
-                new_key = "module." + key
-                sd[new_key] = sd[key]
-                sd.pop(key)
-                    
-            # loading a bare (model only) checkpoint for fine-tune or evaluation
-            model.load_state_dict(sd, strict=False)
+            if args.distributed:
+                for key, value in sd.items():
+                    if "module" not in key:
+                        miss_key_list.append(key)
+                for key in miss_key_list:
+                    new_key = "module." + key
+                    sd[new_key] = sd[key]
+                    sd.pop(key)
+            
+            if len(del_key_list) > 0 or len(miss_key_list) > 0:
+                model.load_state_dict(sd, strict=False)
+                start_epoch = 0
+            else:
+                # loading a bare (model only) checkpoint for fine-tune or evaluation
+                model.load_state_dict(sd, strict=True)
             logging.info(f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})")
 
                 
@@ -642,7 +647,33 @@ def main(args):
             torch._dynamo.config.optimize_ddp = False
 
         model = torch.compile(original_model)
-
+        
+        
+    # 提前搞masking
+    if args.generate_mask:
+        print("Pre-calculating channel distribution...")
+        with torch.no_grad():
+            finetune_data = get_data(
+                args,
+                (preprocess_train, preprocess_val),
+                epoch=start_epoch,
+                tokenizer=tokenizer,
+            )["imagenet-val"].dataloader
+            for i, batch in enumerate(finetune_data):
+                images, _ = batch
+                images = images.to(device=torch.device(args.device), non_blocking=True)
+                if args.distributed:
+                    model.module.visual(images, record_positive=True)
+                else:
+                    model.visual(images, record_positive=True)
+            if args.distributed:
+                model.module.visual.generate_mask()
+            else:
+                model.visual.generate_mask()
+                
+        print("Generated masks for each FFN layer!")
+        
+        
     if 'train' not in data:
         # If using int8, convert to inference mode.
         if args.use_bnb_linear is not None:
@@ -650,6 +681,9 @@ def main(args):
             convert_int8_model_to_inference_mode(model)
         # Evaluate.
         
+        if args.slab:
+            model.adapt_gamma(0)
+
         if args.reparam:
             print("Reparametering the backbone ...")
             model.eval()
@@ -660,23 +694,6 @@ def main(args):
             
         evaluate(model, data, start_epoch, args, tb_writer=writer, tokenizer=tokenizer)
         return
-    
-    # 提前搞masking
-    # if args.finetune_repa:
-    #     print("Pre-calculating channel distribution...")
-    #     with torch.no_grad():
-    #         finetune_data = get_data(
-    #             args,
-    #             (preprocess_train, preprocess_val),
-    #             epoch=start_epoch,
-    #             tokenizer=tokenizer,
-    #         )["imagenet-val"].dataloader
-    #         for i, batch in enumerate(finetune_data):
-    #             images, _ = batch
-    #             images = images.to(device=torch.device(args.device), non_blocking=True)
-    #             model.module.visual(images, record_positive=True)
-    #         model.module.visual.generate_mask()
-    #     print("Generated masks for each FFN layer!")
         
     loss = create_loss(args)
 
