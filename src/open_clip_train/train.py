@@ -86,10 +86,6 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
         i_accum = i // args.accum_freq
         step = num_batches_per_epoch * epoch + i_accum
         
-        
-        if i == 10:
-            break
-
         if not args.skip_scheduler:
             scheduler(step)
             
