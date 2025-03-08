@@ -353,6 +353,9 @@ class CLIP(nn.Module):
         
     def adapt_gamma(self, gamma):
         self.visual.adapt_gamma(gamma)
+        
+    def adapt_idle(self, layers):
+        self.visual.adapt_idle(layers)
 
 
 class CustomTextCLIP(nn.Module):

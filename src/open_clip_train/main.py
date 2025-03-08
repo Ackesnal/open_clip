@@ -336,14 +336,14 @@ def main(args):
             freeze_layer_norm=args.lock_text_freeze_layer_norm)
         
     # Freeze backbone as required
-    if args.finetune_repa_all:
+    if args.finetune_all:
         pass
-    elif args.finetune_repa_visual:
+    elif args.finetune_visual:
         for name, param in model.named_parameters():
             if 'visual' not in name and "logit_scale" not in name:
                 # text transformer梯度置0
                 param.requires_grad = False
-    elif args.finetune_repa_mlp:
+    elif args.finetune_mlp:
         for name, param in model.named_parameters():
             if 'visual' not in name and "logit_scale" not in name:
                 # text transformer梯度置0
@@ -439,7 +439,7 @@ def main(args):
             )
         else:
             # freeze some level when finetune RePaCLIP from OpenCLIP
-            if args.finetune_repa_mlp:
+            if args.finetune_mlp:
                 parameter_group = get_param_groups(model, args.wd)
                 if opt == 'adamw':
                     optimizer = optim.AdamW(
@@ -588,7 +588,7 @@ def main(args):
     scheduler = None
     if 'train' in data and optimizer is not None:
         total_steps = (data["train"].dataloader.num_batches // args.accum_freq) * args.epochs
-        if args.finetune_repa_mlp:
+        if args.finetune_mlp:
             scheduler = finetune_lr(optimizer, args.lr, args.warmup, total_steps)
         elif args.lr_scheduler == "cosine":
             scheduler = cosine_lr(optimizer, args.lr, args.warmup, total_steps)

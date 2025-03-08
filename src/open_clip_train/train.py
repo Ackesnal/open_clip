@@ -77,6 +77,10 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
 
     if args.accum_freq > 1:
         accum_images, accum_texts, accum_features = [], [], {}
+        
+    if args.yang:
+        layers = [max(i, model.module.visual.transformer.layers-epoch-1) for i in range(model.module.visual.transformer.layers)]
+        model.module.adapt_idle(layers)
 
     losses_m = {}
     batch_time_m = AverageMeter()
@@ -236,7 +240,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             )
             samples_per_second = args.accum_freq * args.batch_size * args.world_size / batch_time_m.val
             samples_per_second_per_gpu = args.accum_freq * args.batch_size / batch_time_m.val
-            if args.finetune_repa_mlp:
+            if args.finetune_mlp:
                 for param_group in optimizer.param_groups:
                     if param_group["name"] == "repa_decay":
                         lr_repa = param_group["lr"]

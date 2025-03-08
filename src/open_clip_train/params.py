@@ -516,20 +516,26 @@ def parse_args(args):
         action="store_true",
     )
     parser.add_argument(
-        "--finetune_repa_visual",
+        "--finetune_visual",
         default=False,
         action="store_true",
     )
     parser.add_argument(
-        "--finetune_repa_all",
+        "--finetune_all",
         default=False,
         action="store_true",
     )
     parser.add_argument(
-        "--finetune_repa_mlp",
+        "--finetune_mlp",
         default=False,
         action="store_true",
     )
+    parser.add_argument(
+        "--yang",
+        default=False,
+        action="store_true",
+    )
+    
     
     args = parser.parse_args(args)
 

@@ -269,10 +269,9 @@ class Mlp(nn.Module):
         # Channel idle
         if self.channel_idle:
             self.num_positive = 0
-            self.num_batch = 0
             self.mask = nn.Parameter(torch.zeros((1, 1, self.dim_hidden), dtype=torch.bool), requires_grad=False)
             self.mask[:,:,:self.act_channels] = True
-            self.act_norm = nn.BatchNorm1d(self.dim_hidden)
+            # self.act_norm = nn.BatchNorm1d(self.dim_hidden)
         ######################## ↑↑↑↑↑↑ ########################
             
     def forward(self, x, record_positive=False):
@@ -301,7 +300,7 @@ class Mlp(nn.Module):
             # Activation
             if self.channel_idle:
                 x = torch.where(self.mask, self.act(x), x)
-                x = self.act_norm(x.transpose(-1, -2)).transpose(-1, -2)
+                # x = self.act_norm(x.transpose(-1, -2)).transpose(-1, -2)
             else:
                 x = self.act(x)
         
@@ -323,6 +322,9 @@ class Mlp(nn.Module):
     
     def adapt_gamma(self, gamma):
         self.gamma = gamma
+    
+    def adapt_idle(self, channel_idle):
+        self.channel_idle = channel_idle
         
     def generate_mask(self):
         _, indices = torch.topk(self.num_positive, k=self.act_channels, largest=False, sorted=True)
@@ -463,6 +465,9 @@ class ResidualAttentionBlock(nn.Module):
         
     def adapt_gamma(self, gamma):
         self.mlp.adapt_gamma(gamma)
+    
+    def adapt_idle(self, channel_idle):
+        self.mlp.adapt_idle(channel_idle)
         
     def generate_mask(self):
         self.mlp.generate_mask()
@@ -591,6 +596,13 @@ class Transformer(nn.Module):
     def adapt_gamma(self, gamma):
         for blk in self.resblocks:
             blk.adapt_gamma(gamma)
+            
+    def adapt_idle(self, layers):
+        for i, blk in enumerate(self.resblocks):
+            if i in layers:
+                blk.adapt_idle(True)
+            else:
+                blk.adapt_idle(False)
     
     def generate_mask(self):
         for blk in self.resblocks:
@@ -917,6 +929,9 @@ class VisionTransformer(nn.Module):
     
     def adapt_gamma(self, gamma):
         self.transformer.adapt_gamma(gamma)
+        
+    def adapt_idle(self, layers):
+        self.transformer.adapt_idle(layers)
         
     def generate_mask(self):
         self.transformer.generate_mask()
