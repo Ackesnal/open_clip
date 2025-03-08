@@ -703,7 +703,8 @@ def main(args):
         # 逐层增加idle Yang方法
         if args.yang:
             layers = [i for i in range(max(0, model.module.visual.transformer.layers-1-epoch), model.module.visual.transformer.layers)]
-            print(f"Now finetuning Layers: {layers}")
+            if is_master(args):
+                logging.info(f"Now finetuning Layers: {layers}")
             model.module.adapt_idle(layers)
         # 逐层解冻Yang方法
         if args.yang_freeze:
