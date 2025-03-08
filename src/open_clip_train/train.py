@@ -77,10 +77,6 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
 
     if args.accum_freq > 1:
         accum_images, accum_texts, accum_features = [], [], {}
-        
-    if args.yang:
-        layers = [max(i, model.module.visual.transformer.layers-epoch-1) for i in range(model.module.visual.transformer.layers)]
-        model.module.adapt_idle(layers)
 
     losses_m = {}
     batch_time_m = AverageMeter()
@@ -89,6 +85,10 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
     for i, batch in enumerate(dataloader):
         i_accum = i // args.accum_freq
         step = num_batches_per_epoch * epoch + i_accum
+        
+        
+        if i == 10:
+            break
 
         if not args.skip_scheduler:
             scheduler(step)
@@ -185,21 +185,21 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                 with optimizer.skip_synchronize():
                     scaler.step(optimizer)
             else:
-                # if torch.cuda.current_device() == 0:
-                #     print("Before:")
-                #     for name, param in model.named_parameters():
-                #         if param.requires_grad:
-                #             print(f"{name}: nan: {param.grad.isnan().sum().item()} mean: {param.grad.mean().item()}, max: {param.grad.max().item()}, min: {param.grad.min().item()}, norm: {param.grad.norm().item()}")
+                if torch.cuda.current_device() == 0:
+                    print("Before:")
+                    for name, param in model.named_parameters():
+                        if param.requires_grad:
+                            print(f"{name}: nan: {param.grad.isnan().sum().item()} mean: {param.grad.mean().item()}, max: {param.grad.max().item()}, min: {param.grad.min().item()}, norm: {param.grad.norm().item()}")
                 
                 if args.grad_clip_norm is not None:
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_norm, norm_type=2.0)
                 
-                # if torch.cuda.current_device() == 0:
-                #     print("After:")
-                #     for name, param in model.named_parameters():
-                #         if param.requires_grad:
-                #             print(f"{name}: nan: {param.grad.isnan().sum().item()} mean: {param.grad.mean().item()}, max: {param.grad.max().item()}, min: {param.grad.min().item()}, norm: {param.grad.norm().item()}")
+                if torch.cuda.current_device() == 0:
+                    print("After:")
+                    for name, param in model.named_parameters():
+                        if param.requires_grad:
+                            print(f"{name}: nan: {param.grad.isnan().sum().item()} mean: {param.grad.mean().item()}, max: {param.grad.max().item()}, min: {param.grad.min().item()}, norm: {param.grad.norm().item()}")
                             
                 scaler.step(optimizer)
             scaler.update()

@@ -351,7 +351,6 @@ def main(args):
             elif 'embedding' in name or 'conv1' in name or 'ln_pre' in name:
                 # visual transformer的输入梯度置0
                 param.requires_grad = False
-                
             
     if args.grad_checkpointing:
         model.set_grad_checkpointing()
@@ -374,7 +373,7 @@ def main(args):
         if args.ddp_static_graph:
             # this doesn't exist in older PyTorch, arg only added if enabled
             ddp_args['static_graph'] = True
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device], **ddp_args)
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device], find_unused_parameters=True, **ddp_args)
     
         if args.distill:
             dist_model = torch.nn.parallel.DistributedDataParallel(dist_model, device_ids=[device], **ddp_args)
@@ -463,8 +462,8 @@ def main(args):
                 if opt == 'adamw':
                     optimizer = optim.AdamW(
                         [
-                            {"params": gain_or_bias_params, "weight_decay": 0.},
-                            {"params": rest_params, "weight_decay": args.wd},
+                            {"params": gain_or_bias_params, "weight_decay": 0., 'name': 'no_decay'},
+                            {"params": rest_params, "weight_decay": args.wd, 'name': 'decay'},
                         ],
                         lr=args.lr,
                         betas=(args.beta1, args.beta2),
@@ -700,6 +699,47 @@ def main(args):
     for epoch in range(start_epoch, args.epochs):
         if is_master(args):
             logging.info(f'Start epoch {epoch}')
+        
+        # 逐层增加idle Yang方法
+        if args.yang:
+            layers = [i for i in range(max(0, model.module.visual.transformer.layers-1-epoch), model.module.visual.transformer.layers)]
+            print(f"Now finetuning Layers: {layers}")
+            model.module.adapt_idle(layers)
+        # 逐层解冻Yang方法
+        if args.yang_freeze:
+            for name, param in model.named_parameters():
+                if "visual" in name:
+                    if "ln_post" in name:
+                        param.requires_grad = True
+                    elif "mask" in name:
+                        param.requires_grad = False
+                    else:
+                        names = name.split(".")
+                        if len(names) >=6 :
+                            layer = int(names[4])
+                            if layer > min(layers):
+                                param.requires_grad = True
+                            elif layer == min(layers) and "mlp" in name and "mask" not in name:
+                                param.requires_grad = True
+                            else:
+                                param.requires_grad = False
+                        else:
+                            param.requires_grad = False
+                else:
+                    param.requires_grad = False
+            
+            exclude = lambda n, p: p.ndim < 2 or "bn" in n or "ln" in n or "bias" in n or 'logit_scale' in n
+            include = lambda n, p: not exclude(n, p)
+
+            named_parameters = list(model.named_parameters())
+            gain_or_bias_params = [p for n, p in named_parameters if exclude(n, p) and p.requires_grad]
+            rest_params = [p for n, p in named_parameters if include(n, p) and p.requires_grad]
+            
+            for i in range(len(optimizer.param_groups)):
+                if optimizer.param_groups[i]["name"] == "no_decay":
+                    optimizer.param_groups[i]['params'] = gain_or_bias_params
+                else:
+                    optimizer.param_groups[i]['params'] = rest_params
             
         train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist_model, args, tb_writer=writer)
         completed_epoch = epoch + 1
