@@ -511,7 +511,7 @@ def parse_args(args):
         type=str
     )
     parser.add_argument(
-        "--slab",
+        "--finetune_all",
         default=False,
         action="store_true",
     )
@@ -521,12 +521,17 @@ def parse_args(args):
         action="store_true",
     )
     parser.add_argument(
-        "--finetune_all",
+        "--finetune_mlp",
         default=False,
         action="store_true",
     )
     parser.add_argument(
-        "--finetune_mlp",
+        "--slab",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
+        "--finetune_slab",
         default=False,
         action="store_true",
     )
@@ -540,7 +545,11 @@ def parse_args(args):
         default=False,
         action="store_true",
     )
-    
+    parser.add_argument(
+        "--yang_lr_scheduler",
+        default=False,
+        action="store_true",
+    )
     
     args = parser.parse_args(args)
 

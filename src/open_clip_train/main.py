@@ -33,7 +33,7 @@ from open_clip_train.data import get_data
 from open_clip_train.distributed import is_master, init_distributed_device, broadcast_object
 from open_clip_train.logger import setup_logging
 from open_clip_train.params import parse_args
-from open_clip_train.scheduler import cosine_lr, const_lr, const_lr_cooldown, finetune_lr
+from open_clip_train.scheduler import cosine_lr, const_lr, const_lr_cooldown, finetune_lr, yang_lr
 from open_clip_train.train import train_one_epoch, evaluate
 from open_clip_train.file_utils import pt_load, check_exists, start_sync_process, remote_sync
 from ptflops import get_model_complexity_info
@@ -571,6 +571,9 @@ def main(args):
                 model.load_state_dict(sd, strict=True)
             logging.info(f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})")
 
+        if args.finetune_slab:
+            # reset start epoch to 0 if finetune slab
+            start_epoch = 0
                 
 
     # initialize datasets
@@ -589,6 +592,11 @@ def main(args):
         total_steps = (data["train"].dataloader.num_batches // args.accum_freq) * args.epochs
         if args.finetune_mlp:
             scheduler = finetune_lr(optimizer, args.lr, args.warmup, total_steps)
+        elif args.yang_lr_scheduler:
+            freeze_epoch = model.module.visual.transformer.layers
+            freeze_steps = (data["train"].dataloader.num_batches // args.accum_freq) * freeze_epoch
+            scheduler = yang_lr(optimizer, args.lr, freeze_steps, total_steps)
+            
         elif args.lr_scheduler == "cosine":
             scheduler = cosine_lr(optimizer, args.lr, args.warmup, total_steps)
         elif args.lr_scheduler == "const":

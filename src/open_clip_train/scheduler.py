@@ -107,3 +107,17 @@ def finetune_lr(optimizer, base_lr, warmup_length, steps):
     #     return 
 
     return _lr_adjuster
+
+
+def yang_lr(optimizer, base_lr, freeze_steps, steps):
+    def _lr_adjuster(step):
+        if step <= freeze_steps:
+            lr = base_lr
+        else:
+            e = step - freeze_steps
+            es = steps - freeze_steps
+            lr = 0.5 * (1 + math.cos(math.pi * e / es)) * base_lr
+        assign_learning_rate(optimizer, lr)
+        return lr
+
+    return _lr_adjuster

@@ -77,6 +77,18 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
 
     if args.accum_freq > 1:
         accum_images, accum_texts, accum_features = [], [], {}
+        
+    # Calculate total slab steps
+    if args.slab:
+        if args.epochs <= 5:
+            total_step = args.epochs * num_batches_per_epoch
+        else:
+            total_step = (args.epochs-5) * num_batches_per_epoch
+    else:
+        if args.feature_norm in ["LayerNorm", "LN", "ln", "layernorm"]:
+            gamma = 1
+        else:
+            gamma = 0
 
     losses_m = {}
     batch_time_m = AverageMeter()
@@ -90,15 +102,9 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             scheduler(step)
             
         # Update SLAB normalization gamma
-        if args.slab and i % args.accum_freq == 0:
-            total_step = (args.epochs-5) * num_batches_per_epoch
+        if args.slab and i % args.accum_freq == 0:       
             gamma = max(1 - step / total_step, 0)
             model.module.adapt_gamma(gamma)
-        elif not args.slab:
-            if args.feature_norm in ["LayerNorm", "LN", "ln", "layernorm"]:
-                gamma = 1
-            else:
-                gamma = 0
 
         images, texts = batch
         images = images.to(device=device, dtype=input_dtype, non_blocking=True)
