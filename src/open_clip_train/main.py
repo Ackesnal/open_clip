@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import subprocess
+import argparse
 import sys
 import random
 from datetime import datetime
@@ -99,7 +100,8 @@ def speed_test(model, ntest=100, batchsize=128, x=None, **kwargs):
     
 
 def main(args):
-    args = parse_args(args)
+    if not type(args) == argparse.Namespace:
+        args = parse_args(args)
 
     if torch.cuda.is_available():
         # This enables tf32 on Ampere GPUs which is only 8% slower than
