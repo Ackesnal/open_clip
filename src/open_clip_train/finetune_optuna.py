@@ -17,7 +17,7 @@ def objective(trial):
     if is_master(args):
         lr = trial.suggest_float('lr', 1e-6, 1e-4)
         wd = trial.suggest_float('wd', 0.0, 0.5)
-        epochs = trial.suggest_int('epochs', 15, 50)
+        epochs = trial.suggest_int('epochs', 20, 50)
         yang_freeze = trial.suggest_categorical('yang_freeze', [True, False])
         beta2 = trial.suggest_float('beta2', 0.9, 0.99)
         args.lr = lr

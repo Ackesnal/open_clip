@@ -751,7 +751,7 @@ def main(args):
         # Evaluate 
         if any((v in data for v in ['val', 'imagenet-val', 'imagenet-v2'])):
             metrics = evaluate(model, classifier, data, completed_epoch, args, tb_writer=writer, tokenizer=tokenizer)
-        
+            
         # Save log and checkpoint
         if args.save_logs:
             checkpoint_dict = {'epoch': completed_epoch, 
@@ -803,6 +803,7 @@ def main(args):
     
     if is_master(args) and args.optuna:
         return metrics['imagenet-zeroshot-val-top1']
+    
     # ↑↑ 12. End finetuning ↑↑ ###############################################################################
     ##########################################################################################################
     
@@ -819,10 +820,7 @@ def finetune_one_epoch(model, teacher_model, data, loss, epoch, optimizer, scale
     
     # Setup SLAB per-step adjust
     if args.slab:
-        if args.epochs <= 5:
-            total_step = args.epochs * num_batches_per_epoch
-        else:
-            total_step = (args.epochs - 5) * num_batches_per_epoch
+        total_step = max((args.epochs - 15), 5) * num_batches_per_epoch
     elif args.feature_norm in ['LayerNorm', 'LN', 'ln', 'layernorm']:
         gamma = 1
     else:
@@ -838,10 +836,11 @@ def finetune_one_epoch(model, teacher_model, data, loss, epoch, optimizer, scale
         
         if not args.skip_scheduler:
             scheduler(step)
-            
+        
         # Update SLAB normalization gamma
         if args.slab and i % args.accum_freq == 0:
-            gamma = max(1 - step / total_step, 0)
+            slab_step = num_batches_per_epoch * (epoch - 15) + i_accum
+            gamma = max(1 - slab_step / total_step, 0)
             model.module.adapt_gamma(gamma)
         
         images, labels = samples
