@@ -135,19 +135,22 @@ def get_imagenet(args, preprocess_fns, split):
         dataset = datasets.ImageFolder(data_path, transform=preprocess_fn)
 
     if is_train:
-        idxs = np.zeros(len(dataset.targets))
-        target_array = np.array(dataset.targets)
-        k = 50
-        for c in range(1000):
-            m = target_array == c
-            n = len(idxs[m])
-            arr = np.zeros(n)
-            arr[:k] = 1
-            np.random.shuffle(arr)
-            idxs[m] = arr
+        # idxs = np.zeros(len(dataset.targets))
+        # target_array = np.array(dataset.targets)
+        # k = 50
+        # for c in range(1000):
+        #     m = target_array == c
+        #     n = len(idxs[m])
+        #     arr = np.zeros(n)
+        #     arr[:k] = 1
+        #     np.random.shuffle(arr)
+        #     idxs[m] = arr
 
-        idxs = idxs.astype('int')
-        sampler = SubsetRandomSampler(np.where(idxs)[0])
+        # idxs = idxs.astype('int')
+        # sampler = SubsetRandomSampler(np.where(idxs)[0])
+        sampler = torch.utils.data.DistributedSampler(
+                dataset, num_replicas=args.world_size, rank=args.rank, shuffle=True
+        )
     else:
         sampler = None
 
@@ -157,7 +160,7 @@ def get_imagenet(args, preprocess_fns, split):
         num_workers=args.workers,
         sampler=sampler,
     )
-
+    
     return DataInfo(dataloader=dataloader, sampler=sampler)
 
 

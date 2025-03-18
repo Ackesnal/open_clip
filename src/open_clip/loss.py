@@ -223,6 +223,29 @@ class DistillClipLoss(ClipLoss):
         return contrastive_loss, distill_loss
 
 
+class SelfDistillLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.loss = nn.MSELoss(reduction="mean")
+
+    def forward(
+            self,
+            image_features,
+            logit_scale,
+            dist_image_features,
+            dist_logit_scale,
+            output_dict=False,
+    ):
+        image_features = logit_scale * image_features
+        dist_image_features = dist_logit_scale * dist_image_features
+        loss = self.loss(dist_image_features, image_features)
+        
+        if output_dict:
+            return {"distill_loss": loss}
+
+        return loss
+    
+
 def neighbour_exchange(from_rank, to_rank, tensor, group=None):
     tensor_recv = torch.zeros_like(tensor)
     send_op = torch.distributed.P2POp(

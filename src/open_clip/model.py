@@ -152,8 +152,6 @@ def _build_vision_tower(
         if vision_cfg.act_kwargs is not None:
             act_layer = partial(act_layer, **vision_cfg.act_kwargs)
         
-        print("vision transformer")
-        
         visual = VisionTransformer(
             image_size=vision_cfg.image_size,
             patch_size=vision_cfg.patch_size,
@@ -211,7 +209,6 @@ def _build_text_tower(
         if text_cfg.act_kwargs is not None:
             act_layer = partial(act_layer, **text_cfg.act_kwargs)
         
-        print("text transformer")
         text = TextTransformer(
             context_length=text_cfg.context_length,
             vocab_size=text_cfg.vocab_size,

@@ -301,7 +301,7 @@ def evaluate(model, data, epoch, args, tb_writer=None, tokenizer=None):
         return metrics
     device = torch.device(args.device)
     model.eval()
-
+    
     zero_shot_metrics = zero_shot_eval(model, data, epoch, args, tokenizer=tokenizer)
     metrics.update(zero_shot_metrics)
 
@@ -311,7 +311,7 @@ def evaluate(model, data, epoch, args, tb_writer=None, tokenizer=None):
     if 'val' in data and (args.val_frequency and ((epoch % args.val_frequency) == 0 or epoch == args.epochs)):
         dataloader = data['val'].dataloader
         num_samples = 0
-        samples_per_val = dataloader.num_samples
+        samples_per_val = dataloader.num_samples if "num_samples" in dataloader else len(dataloader)
 
         # FIXME this does not scale past small eval datasets
         # all_image_features @ all_text_features will blow up memory and compute very quickly

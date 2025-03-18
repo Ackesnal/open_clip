@@ -337,21 +337,13 @@ def main(args):
             unlocked_layers=args.lock_text_unlocked_layers,
             freeze_layer_norm=args.lock_text_freeze_layer_norm)
         
-    # Freeze backbone as required
-    if args.finetune_all:
-        pass
-    elif args.finetune_visual:
+    # Freeze text transformer when required
+    if args.finetune_visual:
+        # Set the requires_grad for text transformer to False
         for name, param in model.named_parameters():
             if 'visual' not in name and "logit_scale" not in name:
-                # text transformer梯度置0
-                param.requires_grad = False
-    elif args.finetune_mlp:
-        for name, param in model.named_parameters():
-            if 'visual' not in name and "logit_scale" not in name:
-                # text transformer梯度置0
                 param.requires_grad = False
             elif 'embedding' in name or 'conv1' in name or 'ln_pre' in name:
-                # visual transformer的输入梯度置0
                 param.requires_grad = False
             
     if args.grad_checkpointing:
@@ -380,42 +372,44 @@ def main(args):
         if args.distill:
             dist_model = torch.nn.parallel.DistributedDataParallel(dist_model, device_ids=[device], **ddp_args)
 
+    
+    # def get_param_groups(model, weight_decay):
+    #     decay = []
+    #     no_decay = []
+    #     repa_decay = []
+    #     repa_no_decay = []
+    #     for name, param in model.named_parameters():
+    #         if not param.requires_grad:
+    #             # 不更新本来就不需要梯度的
+    #             continue
+    #         if 'mlp' in name:
+    #             if len(param.shape)==1 or 'ln' in name or 'bn' in name:
+    #                 # bias的decay为0
+    #                 repa_no_decay.append(param)
+    #             else:
+    #                 # 其他部分的decay正常
+    #                 repa_decay.append(param)
+    #         elif 'logit_scale' in name:
+    #             repa_no_decay.append(param)
+    #         else:
+    #             if len(param.shape)==1 or 'ln' in name or 'bn' in name:
+    #                 # bias的decay为0
+    #                 no_decay.append(param)
+    #             else:
+    #                 # 其他部分的decay正常
+    #                 decay.append(param)
+    #     return [
+    #         {'params': no_decay, 'weight_decay': 0., 'name': 'no_decay'},
+    #         {'params': decay, 'weight_decay': weight_decay, 'name': 'decay'},
+    #         {'params': repa_no_decay, 'weight_decay': 0., 'name': 'repa_no_decay'},
+    #         {'params': repa_decay, 'weight_decay': weight_decay, 'name': 'repa_decay'}
+    #     ]
+    
+    
     # create optimizer and scaler
     optimizer = None
     scaler = None
 
-    def get_param_groups(model, weight_decay):
-        decay = []
-        no_decay = []
-        repa_decay = []
-        repa_no_decay = []
-        for name, param in model.named_parameters():
-            if not param.requires_grad:
-                # 不更新本来就不需要梯度的
-                continue
-            if 'mlp' in name:
-                if len(param.shape)==1 or 'ln' in name or 'bn' in name:
-                    # bias的decay为0
-                    repa_no_decay.append(param)
-                else:
-                    # 其他部分的decay正常
-                    repa_decay.append(param)
-            elif 'logit_scale' in name:
-                repa_no_decay.append(param)
-            else:
-                if len(param.shape)==1 or 'ln' in name or 'bn' in name:
-                    # bias的decay为0
-                    no_decay.append(param)
-                else:
-                    # 其他部分的decay正常
-                    decay.append(param)
-        return [
-            {'params': no_decay, 'weight_decay': 0., 'name': 'no_decay'},
-            {'params': decay, 'weight_decay': weight_decay, 'name': 'decay'},
-            {'params': repa_no_decay, 'weight_decay': 0., 'name': 'repa_no_decay'},
-            {'params': repa_decay, 'weight_decay': weight_decay, 'name': 'repa_decay'}
-        ]
-        
     if args.train_data or args.dataset_type == "synthetic":
         assert not args.trace, 'Cannot train with traced model'
 
@@ -439,29 +433,15 @@ def main(args):
                 **opt_kwargs,
             )
         else:
-            # freeze some level when finetune RePaCLIP from OpenCLIP
-            if args.finetune_mlp:
-                parameter_group = get_param_groups(model, args.wd)
-                if opt == 'adamw':
-                    optimizer = optim.AdamW(
-                        parameter_group,
-                        lr=args.lr,
-                        betas=(args.beta1, args.beta2),
-                        eps=args.eps,
-                    )
-                else:
-                    assert False, f'Unknown optimizer {opt}'
-            else:
-                # args.finetune_repa_all, args.finetune_repa_visual and others
-                # If some params are not passed, we use the default values based on model name.
-                exclude = lambda n, p: p.ndim < 2 or "bn" in n or "ln" in n or "bias" in n or 'logit_scale' in n
-                include = lambda n, p: not exclude(n, p)
+            # If some params are not passed, we use the default values based on model name.
+            exclude = lambda n, p: p.ndim < 2 or "bn" in n or "ln" in n or "bias" in n or 'logit_scale' in n
+            include = lambda n, p: not exclude(n, p)
 
-                named_parameters = list(model.named_parameters())
-                gain_or_bias_params = [p for n, p in named_parameters if exclude(n, p) and p.requires_grad]
-                rest_params = [p for n, p in named_parameters if include(n, p) and p.requires_grad]
+            named_parameters = list(model.named_parameters())
+            gain_or_bias_params = [p for n, p in named_parameters if exclude(n, p) and p.requires_grad]
+            rest_params = [p for n, p in named_parameters if include(n, p) and p.requires_grad]
 
-                if opt == 'adamw':
+            if opt == 'adamw':
                     optimizer = optim.AdamW(
                         [
                             {"params": gain_or_bias_params, "weight_decay": 0., 'name': 'no_decay'},
@@ -470,9 +450,9 @@ def main(args):
                         lr=args.lr,
                         betas=(args.beta1, args.beta2),
                         eps=args.eps,
-                    )
-                else:
-                    assert False, f'Unknown optimizer {opt}'
+                )
+            else:
+                assert False, f'Unknown optimizer {opt}'
 
         if is_master(args):
             if is_master(args):
@@ -495,88 +475,40 @@ def main(args):
             except (AttributeError, TypeError) as e:
                 scaler = torch.cuda.amp.GradScaler()
 
-    # optionally resume from a checkpoint
-    start_epoch = 0
-    if args.resume is not None:
-        checkpoint = pt_load(args.resume, map_location='cpu')
-        if 'epoch' in checkpoint:
-            # resuming a train checkpoint w/ epoch and optimizer state
-            start_epoch = checkpoint["epoch"]
-            sd = checkpoint["state_dict"]
-            if not args.distributed and next(iter(sd.items()))[0].startswith('module'):
-                sd = {k[len('module.'):]: v for k, v in sd.items()}
-            
-            # finetune RePaCLIP from OpenCLIP
-            # load vanilla module to the new RePaCLIP model
-            del_key_list = []
-            for key, value in sd.items():
-                if "ln_2" in key:
-                    del_key_list.append(key)
-            for key in del_key_list:
-                new_key = key.split("ln_2")
-                new_key = new_key[0] + "mlp.ln" + new_key[1]
-                sd[new_key] = sd[key]
-                sd.pop(key)
-                
-            miss_key_list = []
-            if args.distributed:
-                for key, value in sd.items():
-                    if "module" not in key:
-                        miss_key_list.append(key)
-                for key in miss_key_list:
-                    new_key = "module." + key
-                    sd[new_key] = sd[key]
-                    sd.pop(key)
-        
-            if len(del_key_list) > 0 or len(miss_key_list) > 0:
-                model.load_state_dict(sd, strict=False)
-                start_epoch = 0
-            else:
-                model.load_state_dict(sd, strict=True)
-                if optimizer is not None:
-                    optimizer.load_state_dict(checkpoint["optimizer"])
-                if scaler is not None and 'scaler' in checkpoint:
-                    scaler.load_state_dict(checkpoint['scaler'])
-                logging.info(f"=> resuming checkpoint '{args.resume}' (epoch {start_epoch})")
-        else:
-            # resuming a checkpoint w/ only model weights
-            if "state_dict" in checkpoint:
-                sd = checkpoint["state_dict"]
-            else:
-                sd = checkpoint
-                    
-            del_key_list = []
-            for key, value in sd.items():
-                if "ln_2" in key:
-                    del_key_list.append(key)
-            for key in del_key_list:
-                new_key = key.split("ln_2")
-                new_key = new_key[0] + "mlp.ln" + new_key[1]
-                sd[new_key] = sd[key]
-                sd.pop(key)
-                
-            miss_key_list = []
-            if args.distributed:
-                for key, value in sd.items():
-                    if "module" not in key:
-                        miss_key_list.append(key)
-                for key in miss_key_list:
-                    new_key = "module." + key
-                    sd[new_key] = sd[key]
-                    sd.pop(key)
-            
-            if len(del_key_list) > 0 or len(miss_key_list) > 0:
-                model.load_state_dict(sd, strict=False)
-                start_epoch = 0
-            else:
-                # loading a bare (model only) checkpoint for fine-tune or evaluation
-                model.load_state_dict(sd, strict=True)
-            logging.info(f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})")
 
-        if args.finetune_slab:
-            # reset start epoch to 0 if finetune slab
-            start_epoch = 0
-                
+    # optionally resume from a checkpoint
+    if args.resume is None and args.pretrained_weight is None:
+        checkpoint = None
+    elif args.resume is not None:
+        checkpoint = pt_load(args.resume, map_location='cpu')
+    else:
+        checkpoint = pt_load(args.pretrained_weight, map_location='cpu')
+    
+    if checkpoint is not None:
+        # Load modules' weights
+        sd = checkpoint["state_dict"] if "state_dict" in checkpoint else checkpoint
+        if not args.distributed and next(iter(sd.items()))[0].startswith('module'):
+            sd = {k[len('module.'):]: v for k, v in sd.items()}
+        if args.distributed and not next(iter(sd.items()))[0].startswith('module'):
+            sd = {f'module.{k}': v for k, v in sd.items()}
+        sd = {k.replace("ln_2", "mlp.ln"): v for k, v in sd.items()}
+        model.load_state_dict(sd, strict=True)
+        
+    if args.resume is not None and 'epoch' in checkpoint:
+        # resuming a train checkpoint w/ epoch and optimizer state
+        start_epoch = checkpoint["epoch"]
+        if is_master(args):
+            logging.info(f"=> Resuming checkpoint '{args.resume}' (epoch {start_epoch}).")
+    else:
+        start_epoch = 0
+        if is_master(args):
+            logging.info(f"=> Resuming checkpoint '{args.pretrained_weight}'.")
+        
+    if "optimizer" in checkpoint and optimizer is not None:
+        optimizer.load_state_dict(checkpoint["optimizer"])
+    if "scaler" in checkpoint and scaler is not None:
+        scaler.load_state_dict(checkpoint['scaler'])
+        
 
     # initialize datasets
     tokenizer = get_tokenizer(args.model, cache_dir=args.cache_dir)
@@ -592,13 +524,10 @@ def main(args):
     scheduler = None
     if 'train' in data and optimizer is not None:
         total_steps = (data["train"].dataloader.num_batches // args.accum_freq) * args.epochs
-        if args.finetune_mlp:
-            scheduler = finetune_lr(optimizer, args.lr, args.warmup, total_steps)
-        elif args.yang_lr_scheduler:
+        if args.lr_scheduler == "yang":
             freeze_epoch = model.module.visual.transformer.layers
             freeze_steps = (data["train"].dataloader.num_batches // args.accum_freq) * freeze_epoch
             scheduler = yang_lr(optimizer, args.lr, freeze_steps, total_steps)
-            
         elif args.lr_scheduler == "cosine":
             scheduler = cosine_lr(optimizer, args.lr, args.warmup, total_steps)
         elif args.lr_scheduler == "const":

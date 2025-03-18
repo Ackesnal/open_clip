@@ -96,6 +96,12 @@ def parse_args(args):
         help="Path to imagenet val set for conducting zero shot evaluation.",
     )
     parser.add_argument(
+        "--imagenet-train",
+        type=str,
+        default=None,
+        help="Path to imagenet val set for conducting zero shot evaluation.",
+    )
+    parser.add_argument(
         "--imagenet-v2",
         type=str,
         default=None,
@@ -511,17 +517,7 @@ def parse_args(args):
         type=str
     )
     parser.add_argument(
-        "--finetune_all",
-        default=False,
-        action="store_true",
-    )
-    parser.add_argument(
         "--finetune_visual",
-        default=False,
-        action="store_true",
-    )
-    parser.add_argument(
-        "--finetune_mlp",
         default=False,
         action="store_true",
     )
@@ -544,11 +540,16 @@ def parse_args(args):
         "--yang_freeze",
         default=False,
         action="store_true",
+    )    
+    parser.add_argument(
+        "--pretrained_weight",
+        default=None,
+        type=str
     )
     parser.add_argument(
-        "--yang_lr_scheduler",
-        default=False,
-        action="store_true",
+        "--self_distill_loss",
+        default=None,
+        type=str
     )
     
     args = parser.parse_args(args)
