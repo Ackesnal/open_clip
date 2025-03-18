@@ -50,7 +50,7 @@ def zero_shot_eval(model, data, epoch, args, tokenizer=None):
     if (epoch % args.zeroshot_frequency) != 0 and epoch != args.epochs:
         return {}
     if args.distributed and not args.horovod:
-        if model is torch.nn.parallel.DistributedDataParallel:
+        if type(model) == torch.nn.parallel.DistributedDataParallel:
             model = model.module
 
     logging.info('Starting zero-shot imagenet.')

@@ -567,26 +567,29 @@ def main(args):
     # ↓↓ 8. Generate channel idle masks w.r.t. heuristics ↓↓ #################################################
     
     if args.channel_idle and args.generate_mask:
-        if is_master(args):
-            logging.info('Pre-calculating channel distribution...')
-        
-        with torch.no_grad():
-            finetune_data = get_imagenet(args, (preprocess_train, preprocess_val), 'val').dataloader
-            for batch in tqdm(finetune_data) if is_master(args) else finetune_data:
-                images, _ = batch
-                images = images.to(device=torch.device(args.device), non_blocking=True)
+        if args.resume:
+            logging.info('Resume from checkpoint. No need for generating new masks.')
+        else:
+            if is_master(args):
+                logging.info('Pre-calculating channel distribution...')
+            
+            with torch.no_grad():
+                finetune_data = get_imagenet(args, (preprocess_train, preprocess_val), 'val').dataloader
+                for batch in tqdm(finetune_data) if is_master(args) else finetune_data:
+                    images, _ = batch
+                    images = images.to(device=torch.device(args.device), non_blocking=True)
+                    if args.distributed:
+                        model.module.visual(images, record_positive=True)
+                    else:
+                        model.visual(images, record_positive=True)
                 if args.distributed:
-                    model.module.visual(images, record_positive=True)
+                    model.module.visual.generate_mask()
                 else:
-                    model.visual(images, record_positive=True)
-            if args.distributed:
-                model.module.visual.generate_mask()
-            else:
-                model.visual.generate_mask()
-                
-        torch.distributed.barrier()
-        if is_master(args):
-            logging.info('Generated masks for each FFN layer!')
+                    model.visual.generate_mask()
+                    
+            torch.distributed.barrier()
+            if is_master(args):
+                logging.info('Generated masks for each FFN layer!')
             
     # ↑↑ 8. Generate channel idle masks w.r.t. heuristics ↑↑ #################################################
     ##########################################################################################################        
@@ -619,6 +622,12 @@ def main(args):
             wandb.watch(model, log='all')
         wandb.save(params_file)
         logging.debug('Finished loading wandb.')
+    
+    # Evaluate student model's performance before finetuning with distillation
+    if is_master(args):
+        logging.info(f"=> Evaluate student's performance.")
+    tokenizer = get_tokenizer(args.model, cache_dir=args.cache_dir)
+    evaluate(model, data, 0, args, tb_writer=writer, tokenizer=tokenizer)
     
     # Evaluate teacher model's performance before finetuning with distillation
     if is_master(args):
@@ -828,12 +837,6 @@ def finetune_one_epoch(model, teacher_model, data, loss, epoch, optimizer, scale
                 if args.grad_clip_norm is not None:
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_norm, norm_type=2.0)
-                    
-                # if torch.cuda.current_device() == 0:
-                #     for name, param in model.named_parameters():
-                #         if param.requires_grad:
-                #             print(f"{name}: nan: {param.grad.isnan().sum().item()} mean: {param.grad.mean().item()}, max: {param.grad.max().item()}, min: {param.grad.min().item()}, norm: {param.grad.norm().item()}")
-
                 scaler.step(optimizer)
             scaler.update()
         else:
