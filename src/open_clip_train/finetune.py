@@ -9,7 +9,9 @@ import random
 import logging
 import argparse
 import subprocess
+from tqdm import tqdm
 from datetime import datetime
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -557,12 +559,6 @@ def main(args):
     if is_master(args):
         logging.info(f"=> Teacher resuming checkpoint '{args.pretrained_weight}'.")
     
-    # Evaluate teacher model's performance
-    if is_master(args):
-        logging.info(f"=> Evaluate teacher's performance.")
-    tokenizer = get_tokenizer(args.model, cache_dir=args.cache_dir)
-    evaluate(teacher_model, data, 0, args, tokenizer=tokenizer)
-    
     # ↑↑ 7. Load pretrained weight for teacher model ↑↑ ######################################################
     ##########################################################################################################
     
@@ -573,9 +569,10 @@ def main(args):
     if args.channel_idle and args.generate_mask:
         if is_master(args):
             logging.info('Pre-calculating channel distribution...')
+        
         with torch.no_grad():
-            finetune_data = get_imagenet(args, (preprocess_train, preprocess_val), 'val')
-            for i, batch in enumerate(finetune_data.dataloader):
+            finetune_data = get_imagenet(args, (preprocess_train, preprocess_val), 'val').dataloader
+            for batch in tqdm(finetune_data) if is_master(args) else finetune_data:
                 images, _ = batch
                 images = images.to(device=torch.device(args.device), non_blocking=True)
                 if args.distributed:
@@ -586,6 +583,8 @@ def main(args):
                 model.module.visual.generate_mask()
             else:
                 model.visual.generate_mask()
+                
+        torch.distributed.barrier()
         if is_master(args):
             logging.info('Generated masks for each FFN layer!')
             
@@ -620,6 +619,12 @@ def main(args):
             wandb.watch(model, log='all')
         wandb.save(params_file)
         logging.debug('Finished loading wandb.')
+    
+    # Evaluate teacher model's performance before finetuning with distillation
+    if is_master(args):
+        logging.info(f"=> Evaluate teacher's performance.")
+    tokenizer = get_tokenizer(args.model, cache_dir=args.cache_dir)
+    evaluate(teacher_model, data, 0, args, tb_writer=writer, tokenizer=tokenizer)
         
     # ↑↑ 9. Setup pretraining configs, wandb, etc. ↑↑ ########################################################
     ##########################################################################################################
