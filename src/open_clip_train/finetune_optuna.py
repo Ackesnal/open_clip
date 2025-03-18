@@ -88,6 +88,9 @@ if __name__ == '__main__':
     if is_master(args):
         study = optuna.create_study(study_name=args.name,  direction='maximize', sampler=optuna.samplers.TPESampler())
         study.optimize(objective, n_trials=args.optuna_ntrials)
+        if is_master(args):
+            print(f"Best hyperparameters: {study.best_params}")
+            print(f"Best validation accuracy: {study.best_value}")
     else:
         cnt = 0
         while cnt < args.optuna_ntrials:
