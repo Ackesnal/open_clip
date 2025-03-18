@@ -1,14 +1,15 @@
-import copy
-import glob
-import logging
+
 import os
 import re
-import subprocess
-import argparse
 import sys
+import copy
+import glob
 import random
+import logging
+import argparse
+import subprocess
+from tqdm import tqdm
 from datetime import datetime
-from functools import partial
 
 import numpy as np
 import torch
@@ -30,13 +31,13 @@ except ImportError:
     hvd = None
 
 from open_clip import create_model_and_transforms, trace_model, get_tokenizer, create_loss
-from open_clip_train.data import get_data
+from open_clip_train.data import get_data, get_imagenet
 from open_clip_train.distributed import is_master, init_distributed_device, broadcast_object
 from open_clip_train.logger import setup_logging
 from open_clip_train.params import parse_args
-from open_clip_train.scheduler import cosine_lr, const_lr, const_lr_cooldown, finetune_lr, yang_lr
+from open_clip_train.scheduler import cosine_lr, const_lr, const_lr_cooldown, yang_lr
 from open_clip_train.train import train_one_epoch, evaluate
-from open_clip_train.file_utils import pt_load, check_exists, start_sync_process, remote_sync
+from open_clip_train.file_utils import pt_load, start_sync_process, remote_sync
 from ptflops import get_model_complexity_info
 import time
 
@@ -247,7 +248,7 @@ def main(args):
     if isinstance(args.force_image_size, (tuple, list)) and len(args.force_image_size) == 1:
         # arg is nargs, single (square) image size list -> int
         args.force_image_size = args.force_image_size[0]
-    random_seed(args.seed, 0)
+    
     model_kwargs = {}
     if args.siglip:
         model_kwargs['init_logit_scale'] = np.log(10)  # different from CLIP
@@ -371,39 +372,6 @@ def main(args):
     
         if args.distill:
             dist_model = torch.nn.parallel.DistributedDataParallel(dist_model, device_ids=[device], **ddp_args)
-
-    
-    # def get_param_groups(model, weight_decay):
-    #     decay = []
-    #     no_decay = []
-    #     repa_decay = []
-    #     repa_no_decay = []
-    #     for name, param in model.named_parameters():
-    #         if not param.requires_grad:
-    #             # 不更新本来就不需要梯度的
-    #             continue
-    #         if 'mlp' in name:
-    #             if len(param.shape)==1 or 'ln' in name or 'bn' in name:
-    #                 # bias的decay为0
-    #                 repa_no_decay.append(param)
-    #             else:
-    #                 # 其他部分的decay正常
-    #                 repa_decay.append(param)
-    #         elif 'logit_scale' in name:
-    #             repa_no_decay.append(param)
-    #         else:
-    #             if len(param.shape)==1 or 'ln' in name or 'bn' in name:
-    #                 # bias的decay为0
-    #                 no_decay.append(param)
-    #             else:
-    #                 # 其他部分的decay正常
-    #                 decay.append(param)
-    #     return [
-    #         {'params': no_decay, 'weight_decay': 0., 'name': 'no_decay'},
-    #         {'params': decay, 'weight_decay': weight_decay, 'name': 'decay'},
-    #         {'params': repa_no_decay, 'weight_decay': 0., 'name': 'repa_no_decay'},
-    #         {'params': repa_decay, 'weight_decay': weight_decay, 'name': 'repa_decay'}
-    #     ]
     
     
     # create optimizer and scaler
@@ -474,7 +442,6 @@ def main(args):
                 scaler = torch.amp.GradScaler(device=device)
             except (AttributeError, TypeError) as e:
                 scaler = torch.cuda.amp.GradScaler()
-
 
     # optionally resume from a checkpoint
     if args.resume is None and args.pretrained_weight is None:
@@ -588,16 +555,13 @@ def main(args):
         
         
     # 提前搞masking
-    if args.generate_mask:
-        print("Pre-calculating channel distribution...")
+    if args.channel_idle and args.generate_mask:
+        if is_master(args):
+            logging.info('Pre-calculating channel distribution...')
+        
         with torch.no_grad():
-            finetune_data = get_data(
-                args,
-                (preprocess_train, preprocess_val),
-                epoch=start_epoch,
-                tokenizer=tokenizer,
-            )["imagenet-val"].dataloader
-            for i, batch in enumerate(finetune_data):
+            finetune_data = get_imagenet(args, (preprocess_train, preprocess_val), 'val').dataloader
+            for batch in tqdm(finetune_data) if is_master(args) else finetune_data:
                 images, _ = batch
                 images = images.to(device=torch.device(args.device), non_blocking=True)
                 if args.distributed:
@@ -609,8 +573,10 @@ def main(args):
             else:
                 model.visual.generate_mask()
                 
-        print("Generated masks for each FFN layer!")
-        
+        torch.distributed.barrier()
+        if is_master(args):
+            logging.info('Generated masks for each FFN layer!')
+            
         
     if 'train' not in data:
         # If using int8, convert to inference mode.
@@ -635,48 +601,64 @@ def main(args):
         
     loss = create_loss(args)
 
+
+    if is_master(args):
+        logging.info(f'')
+        logging.info('============================= Finetuning start =============================')
+        logging.info(f'')
+        
     for epoch in range(start_epoch, args.epochs):
         if is_master(args):
             logging.info(f'Start epoch {epoch}')
         
-        # 逐层增加idle Yang方法
+        # Yang Method: Progressively add channel idle mechanism from the deepest layer to the shallowest layer
         if args.yang:
-            layers = [i for i in range(max(0, model.module.visual.transformer.layers-1-epoch), model.module.visual.transformer.layers)]
+            if args.distributed:
+                total_layer = model.module.visual.transformer.layers
+            else:
+                total_layer = model.visual.transformer.layers
+            progressive_epochs = total_layer - 1
+            layers = [i for i in range(max(0, progressive_epochs - epoch), total_layer)]
             if is_master(args):
-                logging.info(f"Now finetuning Layers: {layers}")
-            model.module.adapt_idle(layers)
-        # 逐层解冻Yang方法
-        if args.yang_freeze:
+                logging.info(f'Yang method: Finetuning {layers} layers')
+            if args.distributed:
+                model.module.visual.adapt_idle(layers)
+            else:
+                model.visual.adapt_idle(layers)
+                
+        # Yang Method with Layer Freeze: Freeze the layers without channel idle
+        if args.yang and args.yang_freeze:
             for name, param in model.named_parameters():
-                if "visual" in name:
-                    if "ln_post" in name:
+                if 'visual' in name:
+                    if 'ln_post' in name:
                         param.requires_grad = True
-                    elif "mask" in name:
+                    elif 'mask' in name:
                         param.requires_grad = False
                     else:
-                        names = name.split(".")
-                        if len(names) >=6 :
+                        names = name.split('.')
+                        if len(names) >= 6:
                             layer = int(names[4])
                             if layer > min(layers):
                                 param.requires_grad = True
-                            elif layer == min(layers) and "mlp" in name and "mask" not in name:
+                            elif layer == min(layers) and 'mlp' in name and ('mask' not in name):
                                 param.requires_grad = True
                             else:
                                 param.requires_grad = False
                         else:
                             param.requires_grad = False
+                elif 'logit_scale' in name:
+                    param.requires_grad = True
                 else:
                     param.requires_grad = False
             
-            exclude = lambda n, p: p.ndim < 2 or "bn" in n or "ln" in n or "bias" in n or 'logit_scale' in n
+            # Re-initialize optimizer with more parameters added to the optimizer
+            exclude = lambda n, p: p.ndim < 2 or 'bn' in n or 'ln' in n or ('bias' in n) or ('logit_scale' in n)
             include = lambda n, p: not exclude(n, p)
-
             named_parameters = list(model.named_parameters())
             gain_or_bias_params = [p for n, p in named_parameters if exclude(n, p) and p.requires_grad]
             rest_params = [p for n, p in named_parameters if include(n, p) and p.requires_grad]
-            
             for i in range(len(optimizer.param_groups)):
-                if optimizer.param_groups[i]["name"] == "no_decay":
+                if optimizer.param_groups[i]['name'] == 'no_decay':
                     optimizer.param_groups[i]['params'] = gain_or_bias_params
                 else:
                     optimizer.param_groups[i]['params'] = rest_params
