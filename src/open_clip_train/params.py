@@ -551,6 +551,17 @@ def parse_args(args):
         default=None,
         type=str
     )
+    parser.add_argument(
+        "--optuna",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
+        "--optuna_ntrials",
+        default=10,
+        type=int
+    )
+    
     
     args = parser.parse_args(args)
 

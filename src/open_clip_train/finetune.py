@@ -3,6 +3,7 @@ import re
 import sys
 import copy
 import glob
+import json
 import math
 import time
 import random
@@ -33,13 +34,13 @@ try:
 except ImportError:
     hvd = None
     
-from open_clip import create_model_and_transforms, create_model, trace_model, get_tokenizer, create_loss, get_input_dtype
+from open_clip import create_model_and_transforms, create_model, trace_model, get_tokenizer, create_loss
+from open_clip import get_input_dtype, build_zero_shot_classifier, IMAGENET_CLASSNAMES, OPENAI_IMAGENET_TEMPLATES
 from open_clip_train.data import get_imagenet
 from open_clip_train.distributed import is_master, init_distributed_device, broadcast_object
 from open_clip_train.logger import setup_logging
 from open_clip_train.params import parse_args
 from open_clip_train.scheduler import cosine_lr, const_lr, const_lr_cooldown, yang_lr
-from open_clip_train.train import evaluate
 from open_clip_train.file_utils import pt_load, start_sync_process, remote_sync
 from open_clip_train.precision import get_autocast
 
@@ -119,7 +120,10 @@ def main(args):
         torch.backends.cudnn.deterministic = False
     
     # Initialize distributed device environment
-    device = init_distributed_device(args)
+    if not args.optuna:
+        device = init_distributed_device(args)
+    else:
+        device = args.device_info
     
     # Setup the name of the experiments
     if args.name is None:
@@ -142,13 +146,14 @@ def main(args):
         os.makedirs(log_base_path, exist_ok=True)
         log_filename = f'out-{args.rank}' if args.log_local else 'out.log'
         args.log_path = os.path.join(log_base_path, log_filename)
-        if os.path.exists(args.log_path) and (not resume_latest):
+        if os.path.exists(args.log_path) and (not resume_latest) and not args.optuna:
             print('Error. Experiment already exists. Use --name {} to specify a new experiment.')
             return -1
         
     # Setup text logger
-    args.log_level = logging.DEBUG if args.debug else logging.INFO
-    setup_logging(args.log_path, args.log_level)
+    if not args.optuna:
+        args.log_level = logging.DEBUG if args.debug else logging.INFO
+        setup_logging(args.log_path, args.log_level)
     
     # Setup wandb, tensorboard, checkpoint logging
     args.wandb = 'wandb' in args.report_to or 'all' in args.report_to
@@ -161,7 +166,7 @@ def main(args):
                 os.makedirs(dirname, exist_ok=True)
     else:
         args.tensorboard_path = ''
-    
+
     # Setup resuming from the latest checkpoint when available
     if resume_latest:
         resume_from = None
@@ -202,7 +207,7 @@ def main(args):
         
     if args.copy_codebase:
         copy_codebase(args)
-        
+    
     # Start the sync proces if remote-sync is not None
     remote_sync_process = None
     if is_master(args) and args.remote_sync is not None:
@@ -447,7 +452,6 @@ def main(args):
         args.self_distill_loss = True
         args.distill = False
         loss = create_loss(args)
-        tokenizer = get_tokenizer(args.model, cache_dir=args.cache_dir)
     else:
         if is_master(args):
             logging.info('Training dataset not found.')
@@ -626,25 +630,54 @@ def main(args):
             wandb.watch(model, log='all')
         wandb.save(params_file)
         logging.debug('Finished loading wandb.')
-    
-    # Evaluate student model's performance before finetuning with distillation
-    if is_master(args):
-        logging.info(f"=> Evaluate student's performance.")
-    tokenizer = get_tokenizer(args.model, cache_dir=args.cache_dir)
-    evaluate(model, data, 0, args, tb_writer=writer, tokenizer=tokenizer)
-    
-    # Evaluate teacher model's performance before finetuning with distillation
-    if is_master(args):
-        logging.info(f"=> Evaluate teacher's performance.")
-    tokenizer = get_tokenizer(args.model, cache_dir=args.cache_dir)
-    evaluate(teacher_model, data, 0, args, tb_writer=writer, tokenizer=tokenizer)
         
     # ↑↑ 9. Setup pretraining configs, wandb, etc. ↑↑ ########################################################
-    ##########################################################################################################
+    ##########################################################################################################    
     
     
     ##########################################################################################################
-    # ↓↓ 10. Finetune on ImageNet ↓↓ #########################################################################
+    # ↓↓ 10. Setup zero-shot classifier and evaluate ↓↓ ######################################################
+    
+    # Generate tokenizer
+    if is_master(args):
+        logging.info('Building tokenizer')
+    tokenizer = get_tokenizer(args.model, cache_dir=args.cache_dir)
+    torch.distributed.barrier()
+    
+    # Generate classifier based on text transformer
+    if is_master(args):
+        logging.info('Building zero-shot classifier')
+    autocast = get_autocast(args.precision, device_type=device.type)
+    with autocast():
+        classifier = build_zero_shot_classifier(
+            model.module if args.distributed else model,
+            tokenizer=tokenizer,
+            classnames=IMAGENET_CLASSNAMES,
+            templates=OPENAI_IMAGENET_TEMPLATES,
+            num_classes_per_batch=10,
+            device=device,
+            use_tqdm=True,
+        )
+    torch.distributed.barrier()
+    
+    # Evaluate student model's performance before finetuning with distillation
+    # if is_master(args):
+    #     logging.info(f"=> Evaluate student's performance.")
+    # evaluate(model, classifier, data, 0, args, tb_writer=writer, tokenizer=tokenizer)
+    # torch.distributed.barrier()
+    
+    # Evaluate teacher model's performance before finetuning with distillation
+    # if is_master(args):
+    #     logging.info(f"=> Evaluate teacher's performance.")
+    # evaluate(teacher_model, classifier, data, 0, args, tb_writer=writer, tokenizer=tokenizer)
+    # torch.distributed.barrier()
+    
+    # ↑↑ 10. Setup zero-shot classifier and evaluate ↑↑ ######################################################
+    ##########################################################################################################  
+    
+    
+    ##########################################################################################################
+    # ↓↓ 11. Finetune on ImageNet ↓↓ #########################################################################
     
     if is_master(args):
         logging.info(f'')
@@ -716,9 +749,8 @@ def main(args):
         completed_epoch = epoch + 1
         
         # Evaluate 
-        tokenizer = get_tokenizer(args.model, cache_dir=args.cache_dir)
         if any((v in data for v in ['val', 'imagenet-val', 'imagenet-v2'])):
-            evaluate(model, data, completed_epoch, args, tb_writer=writer, tokenizer=tokenizer)
+            metrics = evaluate(model, classifier, data, completed_epoch, args, tb_writer=writer, tokenizer=tokenizer)
         
         # Save log and checkpoint
         if args.save_logs:
@@ -731,7 +763,7 @@ def main(args):
             if scaler is not None:
                 checkpoint_dict['scaler'] = scaler.state_dict()
                 
-            if completed_epoch == args.epochs or (args.save_frequency > 0 and completed_epoch % args.save_frequency == 0):
+            if (completed_epoch == args.epochs or (args.save_frequency > 0 and completed_epoch % args.save_frequency == 0)) and not args.optuna:
                 torch.save(checkpoint_dict, os.path.join(args.checkpoint_path, f'epoch_{completed_epoch}.pt'))
                 
             if args.delete_previous_checkpoint:
@@ -741,17 +773,17 @@ def main(args):
             
             if args.save_most_recent:
                 tmp_save_path = os.path.join(args.checkpoint_path, 'tmp.pt')
-                latest_save_path = os.path.join(args.checkpoint_path, LATEST_CHECKPOINT_NAME)
+                latest_save_path = os.path.join(args.checkpoint_path, LATEST_CHECKPOINT_NAME) 
                 torch.save(checkpoint_dict, tmp_save_path)
                 os.replace(tmp_save_path, latest_save_path)
     # End for
                 
-    # ↑↑ 10. Finetune on ImageNet ↑↑ #########################################################################
+    # ↑↑ 11. Finetune on ImageNet ↑↑ #########################################################################
     ##########################################################################################################
     
     
     ##########################################################################################################
-    # ↓↓ 11. End finetuning ↓↓ ###############################################################################
+    # ↓↓ 12. End finetuning ↓↓ ###############################################################################
     
     if args.wandb and is_master(args):
         wandb.finish()
@@ -769,7 +801,9 @@ def main(args):
         else:
             logging.info('Final remote sync failed.')
     
-    # ↑↑ 11. End finetuning ↑↑ ###############################################################################
+    if is_master(args) and args.optuna:
+        return metrics['imagenet-zeroshot-val-top1']
+    # ↑↑ 12. End finetuning ↑↑ ###############################################################################
     ##########################################################################################################
     
     
@@ -912,6 +946,118 @@ def finetune_one_epoch(model, teacher_model, data, loss, epoch, optimizer, scale
                 wandb.log(log_data, step=step)
             batch_time_m.reset()
             data_time_m.reset()
+            
+            
+            
+def evaluate(model, classifier, data, epoch, args, tb_writer=None, tokenizer=None):
+    metrics = {}
+    if not is_master(args):
+        return metrics
+    model.eval()
+    
+    zero_shot_metrics = zero_shot_eval(model, classifier, data, epoch, args, tokenizer=tokenizer)
+    metrics.update(zero_shot_metrics)
+
+    if not metrics:
+        return metrics
+
+    logging.info(
+        f"Eval Epoch: {epoch} "
+        + "\t".join([f"{k}: {round(v, 4):.4f}" for k, v in metrics.items()])
+    )
+
+    log_data = {"val/" + name: val for name, val in metrics.items()}
+
+    if args.save_logs:
+        if tb_writer is not None:
+            for name, val in log_data.items():
+                tb_writer.add_scalar(name, val, epoch)
+
+        with open(os.path.join(args.checkpoint_path, "results.jsonl"), "a+") as f:
+            f.write(json.dumps(metrics))
+            f.write("\n")
+
+    if args.wandb:
+        assert wandb is not None, 'Please install wandb.'
+        if 'train' in data:
+            dataloader = data['train'].dataloader
+            num_batches_per_epoch = dataloader.num_batches // args.accum_freq
+            step = num_batches_per_epoch * epoch
+        else:
+            step = None
+        log_data['epoch'] = epoch
+        wandb.log(log_data, step=step)
+
+    return metrics
+
+
+
+def zero_shot_eval(model, classifier, data, epoch, args, tokenizer=None):
+    if 'imagenet-val' not in data and 'imagenet-v2' not in data:
+        return {}
+    if args.zeroshot_frequency == 0:
+        return {}
+    if (epoch % args.zeroshot_frequency) != 0 and epoch != args.epochs:
+        return {}
+    if args.distributed and not args.horovod:
+        if type(model) == torch.nn.parallel.DistributedDataParallel:
+            model = model.module
+
+    logging.info('Starting zero-shot imagenet.')
+    if tokenizer is None:
+        tokenizer = get_tokenizer(args.model)
+        
+    results = {}
+    if 'imagenet-val' in data:
+        top1, top5 = run(model, classifier, data['imagenet-val'].dataloader, args)
+        results['imagenet-zeroshot-val-top1'] = top1
+        results['imagenet-zeroshot-val-top5'] = top5
+    if 'imagenet-v2' in data:
+        top1, top5 = run(model, classifier, data['imagenet-v2'].dataloader, args)
+        results['imagenetv2-zeroshot-val-top1'] = top1
+        results['imagenetv2-zeroshot-val-top5'] = top5
+
+    logging.info('Finished zero-shot imagenet.')
+
+    return results
+
+
+
+def run(model, classifier, dataloader, args):
+    device = torch.device(args.device)
+    autocast = get_autocast(args.precision, device_type=device.type)
+    input_dtype = get_input_dtype(args.precision)
+
+    with torch.inference_mode():
+        top1, top5, n = 0., 0., 0.
+        for images, target in tqdm(dataloader, unit_scale=args.batch_size):
+            images = images.to(device=device, dtype=input_dtype)
+            target = target.to(device)
+
+            with autocast():
+                # predict
+                output = model(image=images)
+                image_features = output['image_features'] if isinstance(output, dict) else output[0]
+                logits = 100. * image_features @ classifier
+
+            # measure accuracy
+            acc1, acc5 = accuracy(logits, target, topk=(1, 5))
+            top1 += acc1
+            top5 += acc5
+            n += images.size(0)
+
+    top1 = (top1 / n)
+    top5 = (top5 / n)
+    return top1, top5
+
+
+
+def accuracy(output, target, topk=(1,)):
+    pred = output.topk(max(topk), 1, True, True)[1].t()
+    correct = pred.eq(target.view(1, -1).expand_as(pred))
+    return [float(correct[:k].reshape(-1).float().sum(0, keepdim=True).cpu().numpy()) for k in topk]
+
+
 
 def copy_codebase(args):
     from shutil import copytree, ignore_patterns
@@ -926,5 +1072,7 @@ def copy_codebase(args):
     copytree(current_code_path, new_code_path, ignore=ignore_patterns('log', 'logs', 'wandb'))
     print('Done copying code.')
     return 1
+
+
 if __name__ == '__main__':
     main(sys.argv[1:])

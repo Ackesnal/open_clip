@@ -16,6 +16,7 @@ def accuracy(output, target, topk=(1,)):
 
 def run(model, classifier, dataloader, args):
     device = torch.device(args.device)
+    
     autocast = get_autocast(args.precision, device_type=device.type)
     input_dtype = get_input_dtype(args.precision)
 
