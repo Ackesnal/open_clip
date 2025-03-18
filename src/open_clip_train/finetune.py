@@ -469,7 +469,8 @@ def main(args):
     else:
         # Otherwise, load from resumed checkpoint
         checkpoint = pt_load(args.resume, map_location='cpu')
-        
+    
+    # Load state_dict (with modification to vanilla CLIP)
     sd = checkpoint['state_dict'] if 'state_dict' in checkpoint else checkpoint
     if not args.distributed and next(iter(sd.items()))[0].startswith('module'):
         sd = {k[len('module.'):]: v for k, v in sd.items()}
@@ -489,6 +490,7 @@ def main(args):
     
     # If start_epoch > 0 and model performs channel_idle, then adjust its idling layers when args.yang
     if start_epoch > 0 and args.channel_idle:
+        # Yang Method: Progressively add channel idle mechanism from the deepest layer to the shallowest layer
         if args.yang:
             if args.distributed:
                 total_layer = model.module.visual.transformer.layers
@@ -503,6 +505,7 @@ def main(args):
             if is_master(args):
                 logging.info(f'Yang method: Adjust finetuned layers to {layers} w.r.t. resumed weights')
         
+        # Yang Method with Layer Freeze: Freeze the layers without channel idle
         if args.yang and args.yang_freeze:
             for name, param in model.named_parameters():
                 if 'visual' in name:
@@ -604,7 +607,8 @@ def main(args):
     if args.save_logs and args.tensorboard:
         assert tensorboard is not None, 'Please install tensorboard.'
         writer = tensorboard.SummaryWriter(args.tensorboard_path)
-        
+    
+    # (TBD) Start wandb session
     if args.wandb and is_master(args):
         assert wandb is not None, 'Please install wandb.'
         logging.debug('Starting wandb.')
