@@ -561,6 +561,11 @@ def parse_args(args):
         default=10,
         type=int
     )
+    parser.add_argument(
+        "--dist_eval",
+        default=False,
+        action="store_true",
+    )
     
     
     args = parser.parse_args(args)

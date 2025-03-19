@@ -365,8 +365,8 @@ def main(args):
     ##########################################################################################################
     # ↓↓ 4. Load dataset ↓↓ ##################################################################################
     
-    data_loader_train = get_imagenet(args, (preprocess_train, preprocess_val), 'train')
-    data_loader_val = get_imagenet(args, (preprocess_train, preprocess_val), 'val')
+    data_loader_train = get_imagenet(args, (preprocess_train, preprocess_val), 'train', dist_eval=args.dist_eval)
+    data_loader_val = get_imagenet(args, (preprocess_train, preprocess_val), 'val', dist_eval=args.dist_eval)
     data = {'train': data_loader_train, 
             'imagenet-val': data_loader_val}
     
@@ -581,7 +581,7 @@ def main(args):
                 logging.info('Pre-calculating channel distribution...')
             
             with torch.no_grad():
-                finetune_data = get_imagenet(args, (preprocess_train, preprocess_val), 'val').dataloader
+                finetune_data = get_imagenet(args, (preprocess_train, preprocess_val), 'val', dist_eval=False).dataloader
                 for batch in tqdm(finetune_data) if is_master(args) else finetune_data:
                     images, _ = batch
                     images = images.to(device=torch.device(args.device), non_blocking=True)
@@ -820,7 +820,16 @@ def finetune_one_epoch(model, teacher_model, data, loss, epoch, optimizer, scale
     
     # Setup SLAB per-step adjust
     if args.slab:
-        total_step = max((args.epochs - 15), 5) * num_batches_per_epoch
+        if not args.yang_freeze:
+            # When unfreeze, train slab from beginning
+            total_step = max(5, args.epochs-5) * num_batches_per_epoch
+        else:
+            # When freeze, train slab after num_layer epochs
+            if args.distributed:
+                total_layer = model.module.visual.transformer.layers
+            else:
+                total_layer = model.visual.transformer.layers
+            total_step = max(((args.epochs-total_layer) - 5), 5) * num_batches_per_epoch
     elif args.feature_norm in ['LayerNorm', 'LN', 'ln', 'layernorm']:
         gamma = 1
     else:
@@ -839,9 +848,31 @@ def finetune_one_epoch(model, teacher_model, data, loss, epoch, optimizer, scale
         
         # Update SLAB normalization gamma
         if args.slab and i % args.accum_freq == 0:
-            slab_step = num_batches_per_epoch * (epoch - 15) + i_accum
-            gamma = max(1 - slab_step / total_step, 0)
-            model.module.adapt_gamma(gamma)
+            if not args.yang_freeze:
+                # When unfreeze, train slab from beginning
+                slab_step = num_batches_per_epoch * epoch + i_accum
+                gamma = max(1 - slab_step / total_step, 0)
+                if args.distributed:
+                    model.module.adapt_gamma(gamma)
+                else:
+                    model.adapt_gamma(gamma)
+            else:
+                # When freeze, train slab after num_layer epochs
+                if args.distributed:
+                    total_layer = model.module.visual.transformer.layers
+                else:
+                    total_layer = model.visual.transformer.layers
+                
+                if epoch < total_layer:
+                    slab_step = 0
+                else:
+                    slab_step = num_batches_per_epoch * (epoch - total_layer) + i_accum    
+                
+                gamma = max(1 - slab_step / total_step, 0)
+                if args.distributed:
+                    model.module.adapt_gamma(gamma)
+                else:
+                    model.adapt_gamma(gamma)
         
         images, labels = samples
         images = images.to(device=device, dtype=input_dtype, non_blocking=True)
@@ -950,13 +981,15 @@ def finetune_one_epoch(model, teacher_model, data, loss, epoch, optimizer, scale
             
 def evaluate(model, classifier, data, epoch, args, tb_writer=None, tokenizer=None):
     metrics = {}
-    if not is_master(args):
+    if not args.dist_eval and not is_master(args):
         return metrics
     model.eval()
     
     zero_shot_metrics = zero_shot_eval(model, classifier, data, epoch, args, tokenizer=tokenizer)
     metrics.update(zero_shot_metrics)
-
+    if args.dist_eval and not is_master(args):
+        return metrics
+    
     if not metrics:
         return metrics
 
@@ -1015,6 +1048,18 @@ def zero_shot_eval(model, classifier, data, epoch, args, tokenizer=None):
         top1, top5 = run(model, classifier, data['imagenet-v2'].dataloader, args)
         results['imagenetv2-zeroshot-val-top1'] = top1
         results['imagenetv2-zeroshot-val-top5'] = top5
+        
+    if args.dist_eval:
+        t = torch.tensor([results['imagenet-zeroshot-val-top1'], results['imagenet-zeroshot-val-top5']], dtype=torch.float64, device='cuda')
+        torch.distributed.barrier()
+        if is_master(args):
+            print(1)
+        else:
+            print(2)
+        torch.distributed.all_reduce(t, op=torch.distributed.ReduceOp.AVG)
+        t = t.tolist()
+        results['imagenet-zeroshot-val-top1'] = t[0]
+        results['imagenet-zeroshot-val-top5'] = t[1]
 
     logging.info('Finished zero-shot imagenet.')
 
@@ -1029,7 +1074,7 @@ def run(model, classifier, dataloader, args):
 
     with torch.inference_mode():
         top1, top5, n = 0., 0., 0.
-        for images, target in tqdm(dataloader, unit_scale=args.batch_size):
+        for images, target in tqdm(dataloader, unit_scale=args.batch_size) if is_master(args) else dataloader:
             images = images.to(device=device, dtype=input_dtype)
             target = target.to(device)
 

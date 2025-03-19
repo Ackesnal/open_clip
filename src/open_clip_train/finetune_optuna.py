@@ -19,8 +19,10 @@ def objective(trial):
         wd = trial.suggest_float('wd', 0.0, 0.5)
         epochs = trial.suggest_int('epochs', 20, 50)
         yang_freeze = trial.suggest_categorical('yang_freeze', [True, False])
+        batch_size = trial.suggest_int('batch_size', 128, 512, step=128)
         beta2 = trial.suggest_float('beta2', 0.9, 0.99)
         args.lr = lr
+        args.batch_size = batch_size
         args.wd = wd
         args.epochs = epochs
         args.yang_freeze = yang_freeze
@@ -29,6 +31,7 @@ def objective(trial):
     args.lr = broadcast_object(args, args.lr)
     args.wd = broadcast_object(args, args.wd)
     args.epochs = broadcast_object(args, args.epochs)
+    args.batch_size = broadcast_object(args, args.batch_size)
     args.wd = broadcast_object(args, args.wd)
     args.yang_freeze = broadcast_object(args, args.yang_freeze)
     args.beta2 = broadcast_object(args, args.beta2)

@@ -115,7 +115,7 @@ def get_dataset_size(shards):
     return total_size, num_shards
 
 
-def get_imagenet(args, preprocess_fns, split):
+def get_imagenet(args, preprocess_fns, split, dist_eval=False):
     assert split in ["train", "val", "v2"]
     is_train = split == "train"
     preprocess_train, preprocess_val = preprocess_fns
@@ -149,10 +149,15 @@ def get_imagenet(args, preprocess_fns, split):
         # idxs = idxs.astype('int')
         # sampler = SubsetRandomSampler(np.where(idxs)[0])
         sampler = torch.utils.data.DistributedSampler(
-                dataset, num_replicas=args.world_size, rank=args.rank, shuffle=True
+            dataset, num_replicas=args.world_size, rank=args.rank, shuffle=True
         )
     else:
-        sampler = None
+        if dist_eval:
+            sampler = torch.utils.data.DistributedSampler(
+                dataset, num_replicas=args.world_size, rank=args.rank, shuffle=True
+            )
+        else:
+            sampler = None
 
     dataloader = torch.utils.data.DataLoader(
         dataset,
